@@ -467,11 +467,17 @@
                           tg (aget tglyph i)
                           sm (if tg 0 (aget smask i))
                           ;; sprite glyphs diff on code AND colour (bits 21+)
-                          gl (if tg (int (first tg))
+                          ;; text diffs on glyph AND colour too, so fades redraw
+                          gl (if tg (bit-or (int (first tg)) (bit-shift-left (aget tcol i) 21))
                                  (if (= 0 sm) 0x2580
                                      (bit-or (aget gcode sm) (bit-shift-left (aget scol i) 21))))]
                       (aset ovr (+ cx (* y0 S)) -1)
                       (aset ovr (+ cx (* y1 S)) -1)
+                      ;; coarse frames skip pixels; drop their light so none goes stale
+                      (when coarse?
+                        (let [j (+ cx (* y1 S))] (aset ar j 0.0) (aset ag j 0.0) (aset ab j 0.0))
+                        (when (= 1 (bit-and cx 1))
+                          (let [j (+ cx (* y0 S))] (aset ar j 0.0) (aset ag j 0.0) (aset ab j 0.0))))
                       (when (not (and (= top (aget ptop i)) (= bot (aget pbot i))
                                       (= gl (aget pglyph i))))
                         (aset ptop i top) (aset pbot i bot) (aset pglyph i gl)
