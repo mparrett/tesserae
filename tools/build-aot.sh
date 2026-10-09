@@ -55,6 +55,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#nss[@]} -gt 0 ]] || nss=(tesserae.gfx tesserae.world)
 letgo="$(cd "$letgo" && pwd)"
+mkdir -p "$(dirname "$out")"
+out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
 canonical="${TESSERAE_LETGO_CANONICAL:-$game/../let-go}"
 [[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout" >&2; exit 2; }
 [[ -f "$letgo/lg.go" ]] || { echo "build-aot: $letgo is not a let-go checkout" >&2; exit 2; }
