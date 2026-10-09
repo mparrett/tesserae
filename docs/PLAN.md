@@ -21,7 +21,7 @@ renderer good enough to show off the rotation.
 - [x] The Heart: ball starts walled in, no paddle, a borrowed tile the game picks (TAB to choose another)
 - [x] Story: prologue, chapter cards (typewriter), epilogue; title attract mode
 - [x] Capture tooling: tmux → PNG/GIF, level runner, autopilot
-- [ ] AOT-lowered `lg` for the raster hot paths (background spike; see below)
+- [x] AOT-lowered `lg` for the raster hot paths (optional binary, `tools/build-aot.sh`)
 
 ## v1: depth and feel
 
@@ -52,14 +52,8 @@ renderer good enough to show off the rotation.
 ## Performance notes
 
 - VM cost is about 0.3 µs per simple op. Steady frames: 1–4 ms compose for 60–150 dirty
-  cells. Full-field compose (rotation transitions, level start) was 107 ms. With the
-  world-pixel cache it is about 2× cheaper (measured relative to a same-run baseline on a
-  loaded box; re-time on a quiet box).
-- Next levers, in order: AOT-lowered gfx/world namespaces (let-go `benchmark/aot`
-  pipeline), a coarser rotation raster (sample at k=1 and double), and emitting runs of
-  equal bg cells as `ECH`.
-- let-go gaps found (upstream candidates): `bit-or`/`bit-and` take exactly 2 args (Clojure is
-  variadic); `Math/PI`, `Math/sin` and `Math/cos` are unresolved while `Math/sqrt` and
-  `Math/abs` resolve (use `math/*`); `(str sb)` on a StringBuilder prints the object
-  (use `.toString`); the SGR mouse decoder drops the motion bit (1003 motion arrives as
-  `:button :none` presses).
+  cells. Full-field compose, rotated: 107 → 71 → 54 ms (VM), 36 ms coarse, ~20 ms coarse
+  on the AOT binary. The DEVLOG has the full arc.
+- Remaining levers: emitting runs of equal-bg cells as `ECH`, and rebuilding the AOT binary
+  after gfx changes.
+- let-go gaps found: see `docs/letgo-upstream-candidates.md`.
