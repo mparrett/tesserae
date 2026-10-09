@@ -196,6 +196,11 @@
 (defn indices-where [pred]
   (loop [i 0 acc []] (if (< i N) (recur (inc i) (if (pred (aget tt i)) (conj acc i) acc)) acc)))
 
+(defn indices-where-i
+  "Tile indices i for which (pred i) holds."
+  [pred]
+  (loop [i 0 acc []] (if (< i N) (recur (inc i) (if (pred i) (conj acc i) acc)) acc)))
+
 (defn piece-left
   "Tiles still standing in piece p of the given type set."
   [p types]

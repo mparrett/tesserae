@@ -1,0 +1,54 @@
+;; tools/sim.lg — headless balance simulator.
+;;
+;;   ./tools/lg-pinned -source-paths . tools/sim.lg [levels...] [--secs N] [--runs R]
+;;
+;; Runs each level's rules + physics with the autopilot at a fixed 1/50 s step and no
+;; terminal output, and reports game-seconds to clear, lives lost and peak balls. The
+;; autopilot is a weak player (no aiming, no magnet), so read the numbers as an upper
+;; bound on difficulty for a paddle level and a sanity check for the rest.
+(require '[clojure.string] '[tesserae.game :as g] '[tesserae.gfx :as gfx] '[tesserae.levels :as L])
+
+(def argv *command-line-args*)
+(defn flag [name default]
+  (loop [xs argv] (cond (empty? xs) default
+                        (= (first xs) name) (parse-double (second xs))
+                        :else (recur (rest xs)))))
+(def max-secs (flag "--secs" 300.0))
+(def runs (int (flag "--runs" 1.0)))
+(def picks (let [pos (loop [xs argv acc []]
+                        (cond (empty? xs) acc
+                              (clojure.string/starts-with? (first xs) "--") (recur (drop 2 xs) acc)
+                              :else (recur (rest xs) (conj acc (first xs)))))
+                 ns (keep (fn [a] (when (re-matches #"\d+" a) (dec (parse-long a)))) pos)]
+             (if (seq ns) ns (range (count L/levels)))))
+
+(reset! g/scr (gfx/make-screen 160 52 26))
+(reset! g/opts {:autoplay true})
+(g/wire-world!)
+
+;; rendering-side state the update path touches
+(defn sim-level [li]
+  (reset! g/S {:score 0 :lives 5 :mode :play :mode-t 0.0 :best 0})
+  (g/load-level! li)
+  (swap! g/S assoc :mode :play)
+  (let [dt 0.02]
+    (loop [t 0.0 peak 0]
+      (let [st @g/S]
+        (cond
+          (= :clear (:mode st)) {:result :clear :secs t :lives (:lives st) :score (:score st) :peak peak}
+          (= :over (:mode st)) {:result :over :secs t :left (:goal-left st) :score (:score st) :peak peak}
+          (> t max-secs) {:result :timeout :secs t :left (:goal-left st) :lives (:lives st) :peak peak}
+          :else (do (g/update-play! dt) (g/update-fx! dt)
+                    ;; the renderer normally clears this; keep the mark arrays from growing stale
+                    (let [sc @g/scr] (dotimes [i (alength (:mark sc))] (aset (:mark sc) i 0)))
+                    (recur (+ t dt) (max peak (count (:balls @g/S))))))))))
+
+(doseq [li picks]
+  (let [l (nth L/levels li)]
+    (dotimes [r runs]
+      (let [t0 (System/nanoTime)
+            res (sim-level li)]
+        (println (format "%-5s %-16s %-8s %6.1fs  %s  (%.1fs wall)"
+                         (:id l) (:name l) (name (:result res)) (:secs res)
+                         (pr-str (dissoc res :result :secs))
+                         (/ (- (System/nanoTime) t0) 1e9)))))))

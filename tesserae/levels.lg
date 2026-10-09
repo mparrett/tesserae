@@ -219,38 +219,38 @@
 
 (def levels
   [{:id "1.1" :name "First Light" :chapter "I · THE CHIPPING" :theme :indigo
-    :map map-first-light :goal :clear :speed 24.0
+    :map map-first-light :goal :clear :speed 28.8
     :card ["The outer courses are fouled."
            ""
            "Strike them loose. The Spark remembers their colours even when they forget."
            ""
            "Clear a whole piece, all four tesserae, and it sings."]}
    {:id "1.2" :name "Mitosis" :chapter "I · THE CHIPPING" :theme :indigo
-    :map map-mitosis :goal :clear :speed 25.0
+    :map map-mitosis :goal :clear :speed 30.0
     :card ["Some tiles are cells, still alive beneath the grout."
            ""
            "Touch one and the Spark divides."]}
    {:id "2.1" :name "Quarter Turn" :chapter "II · THE TURNING" :theme :teal
-    :map map-quarter-turn :goal :clear :speed 24.0 :rotate 15.0
+    :map map-quarter-turn :goal :clear :speed 28.8 :rotate 15.0
     :card ["The Mosaic was never meant to hold still. It is a dial, and the Grout has jammed it."
            ""
            "Free it and the sky turns under your feet."
            ""
            "Your Trowel stays where you stand. The world does not."]}
    {:id "2.2" :name "Twin Trowels" :chapter "II · THE TURNING" :theme :teal
-    :map map-twin :goal :clear :speed 22.0 :rotate 18.0 :twin true :balls 2
+    :map map-twin :goal :clear :speed 26.4 :rotate 18.0 :twin true :balls 2
     :card ["Two horizons. Two Trowels. One hand."
            ""
            "Both edges are open now. Both Trowels follow you."]}
    {:id "3.1" :name "Blueprint" :chapter "III · THE SETTING" :theme :umber
-    :map map-blueprint :goal :build :speed 24.0
+    :map map-blueprint :goal :build :speed 28.8
     :card ["Breaking is half the craft."
            ""
            "The blueprints still glimmer where the old tiles were. Strike a ghost and it sets, true and gold-rimmed."
            ""
            "Build the crown whole."]}
    {:id "3.2" :name "Grout Creep" :chapter "III · THE SETTING" :theme :umber
-    :map map-grout :goal :build :speed 25.0 :decay 7.0 :balls 2
+    :map map-grout :goal :build :speed 30.0 :decay 9.0 :balls 2
     :card ["The Grout fights back now, loosening what you set."
            ""
            "Finish the key faster than it forgets."]}
@@ -267,14 +267,14 @@
            ""
            "The tesserae here are soft. Knock them loose to reach the lamps inside."]}
    {:id "5.1" :name "Lodestone" :chapter "V · LODESTONE" :theme :violet
-    :map map-lodestone :goal :clear :speed 26.0 :gravity 9.0 :magnet true
+    :map map-lodestone :goal :clear :speed 31.2 :gravity 9.0 :magnet true
     :card ["Iron sleeps in the old foundation, and it pulls at the Spark."
            ""
            "So can you. SPACE wakes the Trowel's own lodestone: catch, aim, release."
            ""
            "Rubber bounds. Lead breaks through."]}
    {:id "6.1" :name "The Heart" :chapter "VI · THE HEART" :theme :crimson
-    :map map-heart :goal :heart :speed 21.0 :ward true :boundary :open
+    :map map-heart :goal :heart :speed 25.2 :ward true :boundary :open
     :card ["At the centre the Grout has walled the Spark inside its own heart."
            ""
            "You have no Trowel, only the tile the Mosaic lends you, and it will not stay lent for long."
@@ -282,4 +282,4 @@
            "Guard the breaches. Let the Spark eat its way out."]}])
 
 (def title-level
-  {:id "--" :name "Attract" :chapter "" :theme :indigo :map map-title :goal :clear :speed 22.0})
+  {:id "--" :name "Attract" :chapter "" :theme :indigo :map map-title :goal :clear :speed 26.4})

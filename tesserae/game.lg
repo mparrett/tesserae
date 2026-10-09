@@ -140,12 +140,17 @@
           (float-text! cx cy "LIT" 0xfff0a0) nil)
 
       (= t w/GHOST)
-      (do (w/set-ghost! i)
-          (add-score! 15)
-          (burst! cx cy (aget w/tbase i) 10 12.0)
-          (swap! S assoc :goal-dirty true)
-          (piece-done! i piece #{w/GHOST} "LAID" 120)
-          nil)
+      ;; the whole tetromino snaps into place, Tetris-style
+      (let [mates (if (pos? piece)
+                    (w/indices-where-i (fn [j] (and (= w/GHOST (aget w/tt j)) (= piece (aget w/tpiece j)))))
+                    [i])]
+        (doseq [j mates]
+          (w/set-ghost! j)
+          (let [[x y] (w/tile-center j)] (burst! x y (aget w/tbase j) 6 10.0)))
+        (add-score! (* 15 (count mates)))
+        (swap! S assoc :goal-dirty true)
+        (piece-done! i piece #{w/GHOST} "LAID" 120)
+        nil)
 
       :else (do (burst! cx cy 0x8090a0 2 6.0)
                 (when (and (lv :ward) (= t w/WALL)) (swap! S assoc :combo 0))
@@ -262,7 +267,12 @@
                       (gfx/rot-vec sc (* 6.0 dx) (* 6.0 dy) -1)
                       [0.0 0.0]))
                   [0.0 0.0])]
-    [(+ gx tx mx px) (+ gy ty my py)]))
+    (let [[sx sy] (if-let [ss (seq (:singers @S))]
+                    (let [[cx cy] (apply min-key (fn [[x y]] (len (- x (:x b)) (- y (:y b)))) ss)
+                          dx (- cx (:x b)) dy (- cy (:y b)) d (max 1.0 (len dx dy))]
+                      [(* 14.0 (/ dx d)) (* 14.0 (/ dy d))])
+                    [0.0 0.0])]
+      [(+ gx tx mx px sx) (+ gy ty my py sy)])))
 
 (defn step-ball
   "One physics step. Returns the ball (maybe with :fx) or nil when lost."
@@ -353,7 +363,12 @@
             :lamps (w/count-where #(= % w/LAMP))
             :heart (w/count-where w/breakable?)
             0)]
-    (swap! S assoc :goal-left n :goal-dirty false)))
+    (swap! S assoc :goal-left n :goal-dirty false
+           ;; the last tesserae sing: few goal tiles left -> they call the Spark
+           :singers (if (and (pos? n) (<= n 8) (not (lv :tilt)))
+                      (let [pred (case goal :build #(= % w/GHOST) w/breakable?)]
+                        (mapv w/tile-center (w/indices-where pred)))
+                      []))))
 
 (defn lodestones []
   (mapv w/tile-center (w/indices-where #(= % w/MAGNET))))
@@ -481,8 +496,20 @@
             ;; lead the ball to the paddle line, folding wall bounces
             tt (if (pos? vy) (/ (- PADDLE-Y sy) vy) 0.0)
             x (+ sx (* vx (min tt 1.5)))
-            x (let [m (mod x 96.0)] (if (> m 48.0) (- 96.0 m) m))]
-        (+ x (* 2.2 (math/sin (* 0.7 (:time @S))))))
+            x (let [m (mod x 96.0)] (if (> m 48.0) (- 96.0 m) m))
+            hw (* 0.5 PADDLE-W)
+            ;; aim: send the bounce at the front row of what's left
+            pred (if (= :build (lv :goal)) #(= % w/GHOST) w/breakable?)
+            goals (when (and (pos? vy) (< tt 0.6)) (w/indices-where pred))
+            aim (or (:aim @S)
+                    (when (seq goals)
+                      (let [i (rand-nth goals) [wx wy] (w/tile-center i)] (gfx/w->s sc wx wy))))
+            _ (if (and (pos? vy) (< tt 0.6)) (swap! S assoc :aim aim) (swap! S assoc :aim nil))
+            off (if aim
+                  (let [[tx ty] aim ang (math/atan2 (- tx x) (- PADDLE-Y ty))]
+                    (clampf (/ ang 1.05) -0.85 0.85))
+                  0.0)]
+        (- x (* off hw)))
       24.0)))
 
 (defn update-paddle! [dt]
@@ -530,6 +557,11 @@
     (burst! (clampf (:x b) 1.0 47.0) (clampf (:y b) 1.0 47.0) 0xff5050 18 18.0)))
 
 (defn life-lost! []
+  (if (lv :tilt)
+    (do (add-score! -150)
+        (banner! "MARBLE LOST  -150" 0xff7080 1.4)
+        (swap! S assoc :combo 0 :tilt [0.0 0.0]
+               :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S))) 0.0 0.0 :marble)]))
   (let [st (swap! S update :lives dec)]
     (if (<= (:lives st) 0)
       (do (swap! S assoc :mode :over :mode-t 0.0)
@@ -539,7 +571,7 @@
           (if (lv :tilt)
             (swap! S assoc :tilt [0.0 0.0] :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
                                              0.0 0.0 :marble)])
-            (spawn-balls!))))))
+            (spawn-balls!)))))))
 
 (defn level-won! []
   (let [secs (:time @S)
@@ -670,6 +702,9 @@
     (doseq [[x y] (:lodes st)]
       (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
         (gfx/glow! sc x y (+ 4.0 (* 1.0 (math/sin (* 3.0 t)))) 0.0 0xd03050 0.25)))
+    ;; singing tiles pulse
+    (doseq [[x y] (:singers st)]
+      (gfx/glow! sc x y 3.0 0.0 0xfff0c0 (+ 0.25 (* 0.2 (math/sin (+ (* 5.0 t) x))))))
     ;; the borrowed tile glows so the eye finds it
     (when (and (lv :ward) (>= (:ward st) 0))
       (let [[x y] (w/tile-center (:ward st))]
