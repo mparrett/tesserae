@@ -5,7 +5,7 @@
      ,  ghost fill      IOTSZJL breakable piece / iotszjl ghost piece
      H  hard (2 hits)   #  wall          +  mitosis   *  rubber   %  lead
      @  lodestone       x  pit           $  lamp      B  ball / marble start
-     =  grout shield    C  the Grout Core")
+     =  grout shield    C  the Grout Core   ^  glass ball   ~  ghost ball")
 
 (def prologue
   ["Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the sky's memory."
@@ -69,7 +69,7 @@
   ["........................"
    "..HHHHHHHHHHHHHHHHHHHH.."
    "..H??????????????????H.."
-   "..H???+????????+?????H.."
+   "..H???+?^??????+?????H.."
    "..H??????????????????H.."
    "..H?????+??????+?????H.."
    "..H??????????????????H.."
@@ -170,7 +170,7 @@
   ["........................"
    "..????????????????????.."
    "..????????????????????.."
-   "..??%?????????????*???.."
+   "..??%??????~??????*???.."
    "..????????????????????.."
    "........................"
    ".....@..........@......."
@@ -230,6 +230,20 @@
                  (shield [x y]) \=
                  :else \.)))))
 
+;; the Mortar Well (3.3): a steel well, interior cols 8..15, rows 4..13, floor row 14,
+;; with four open rows above its mouth for the Spark to cross
+(def well-shape {:cols [8 15] :rows [4 13]})
+
+(def map-mortar-well
+  (gen (fn [x y]
+         (cond (and (<= 4 y 14) (or (= x 7) (= x 16))) \#
+               (and (= y 14) (<= 7 x 16)) \#
+               (= [x y] [3 10]) \^
+               (= [x y] [20 10]) \~
+               (and (<= 9 y 10) (or (<= 1 x 5) (<= 18 x 22))) \?
+               (and (= y 16) (<= 9 x 14)) \?
+               :else \.))))
+
 ;; ---------------------------------------------------------------------------
 ;; themes
 
@@ -282,6 +296,16 @@
     :card ["The Grout fights back now, loosening what you set."
            ""
            "Finish the key faster than it forgets."]}
+   {:id "3.3" :name "Mortar Well" :chapter "III · THE SETTING" :theme :umber
+    :map map-mortar-well :goal :lines :speed 28.8
+    :well (merge well-shape {:fall 0.8 :lines 5 :seek 12})
+    :card ["Beneath the courses lies the Mortar Well, where the first masons poured the Mosaic's bed."
+           ""
+           "The Grout pours there still, one piece at a time, and where a piece comes to rest it sets."
+           ""
+           "Strike a falling piece on the side to shove it, from below to turn it. Lay a whole course and the Well takes it down."
+           ""
+           "Five courses. Do not let it fill to the brim."]}
    {:id "4.1" :name "Tilt Table" :chapter "IV · THE TILT" :theme :felt
     :map map-tilt :goal :lamps :tilt true
     :card ["Beneath the Mosaic lies the Orrery: a marble table of lamps and pits."
