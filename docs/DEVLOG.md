@@ -366,3 +366,12 @@ one conflict, in the ball draw call, and both sides were kept.
 - Details in `docs/letgo-upstream-candidates.md`. Filed afterwards as nooga/let-go#1050 with a
   standalone repro, and fixed in nooga/let-go#1051 (one fixpoint per function instead of a
   walk per query; lowering `compose!` drops from over an hour to under a minute).
+
+## 2026-10-09: repo made public
+
+- Swept the tree and full history before the flip. No secrets, tokens or credentials. The current
+  tree has no local paths: the tools default to paths relative to the repo, with env overrides
+  (`TESSERAE_AOT_LETGO`, `TESSERAE_AOT_OUT`, `HEAVY_LOCK`, `PW_MODULE`). Older commits still
+  carry the original local paths; history was left unrewritten by choice.
+- MIT license added. `main` and `spike/table3d` are public. The repro branch stayed local, since
+  its content lives in let-go #1050/#1051.
