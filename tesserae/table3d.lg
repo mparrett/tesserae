@@ -1,0 +1,603 @@
+(ns tesserae.table3d
+  "The tilt table in 3D (spike). The 2D raster maps each screen pixel back
+   into the world through an inverse rotation; here the inverse map is a
+   homography for the tilted board seen by a perspective camera.
+
+   Geometry. Board-local coordinates are centred on the board: x right, y
+   down (as on screen), z up toward the camera, in world units. The tilt
+   [tx ty] turns the board by tx*TILT-MAX about its y axis (right side down
+   for tx > 0) and ty*TILT-MAX about its x axis (bottom down for ty > 0):
+
+       R = [ c1      0    s1    ]
+           [ -s1 s2  c2   c1 s2 ]
+           [ -s1 c2  -s2  c1 c2 ]
+
+   A camera at distance D above the centre projects camera-frame X to screen
+   u = F X.x / (D - X.z), v = F X.y / (D - X.z). For the plane z = h this is a
+   3x3 projective map of (x, y, 1); its adjugate takes a screen point back to
+   the plane. Two of those per pixel, for z = Hmax and z = 0, give the view
+   ray's segment through the height range; xy is affine in z along a ray, so
+   the segment is exactly the ray's shadow on the board.
+
+   Columns. Every tile has a height (walls tall, soft tiles low, pits
+   negative). A grid walk (DDA) along the segment from the top plane down
+   finds the first column the ray enters: a side face (shaded by its normal
+   against the light, darker toward its foot), a column top (the world-pixel
+   cache colour, lit), or the floor (cache colour, lit by the board normal,
+   darkened where a column stands between it and the light, plus a specular
+   sheen at the mirror point of a lamp above the table). Pits are holes; the
+   table has a slab edge.
+
+   Cost. The board renders into the screen-pixel buffer (:b3 scr) in 2x2
+   pixel blocks, only when the tilt (quantized to Q) or a tile changes, and
+   marks just the cells whose colour moved; compose! reads b3 in place of the
+   rotated cache. Sprites go through gfx/w->s, which projects in 3D mode."
+  (:require [tesserae.gfx :as gfx] [tesserae.world :as w]))
+
+;; ---------------------------------------------------------------------------
+;; tuning
+
+(def TILT-MAX 0.2)     ; rad of board tilt at |tilt| = 1 (about 11.5 degrees)
+(def CAM-D 42.0)       ; camera height above the board centre, world units
+(def FIT 0.88)         ; untilted board width / arena width
+(def Q 0.04)           ; tilt quantum: the board re-renders when this moves
+(def WALL-H 2.6)       ; wall height (a tile is 2 units wide)
+(def PIT-D 2.2)        ; pit depth
+(def SLAB 2.4)         ; table thickness under the felt
+(def UNIT-H 0.65)      ; one :hmap digit, in world units
+(def AMB 0.30)         ; ambient share of the lighting
+(def DIF 0.95)         ; diffuse share
+(def SPEC-R 8.0)       ; specular sheen radius, world units
+(def SPEC 70.0)        ; specular peak (added to each channel)
+(def SLAB-C 0x4a3422)  ; the table's wooden edge
+(def PIT-WALL 0x3a3a44)
+
+;; light direction (camera frame, toward the light): up and to the upper left
+(def ^:private LX -0.42) (def ^:private LY -0.55) (def ^:private LZ 0.72)
+;; a lamp over the table, for the sheen (camera frame, board centre = origin)
+(def ^:private PLX -10.0) (def ^:private PLY -14.0) (def ^:private PLZ 70.0)
+
+;; ---------------------------------------------------------------------------
+;; state
+
+(def hts (double-array w/N))      ; column height per tile, pits negative
+(def hbase (double-array w/N))    ; height before the ring wobble
+(def ring (double-array (* 2 w/N)))   ; per tile: wobble amplitude, phase time
+(def ringing (atom 0))            ; tiles still ringing
+(def hmap (atom nil))             ; level :hmap rows, or nil
+
+;; per-frame parameters
+;;  0-8 R   9 F   10 D   11 Hmax
+;;  12-20 inverse map z = Hmax   21-29 inverse map z = 0
+;;  30-32 light in board frame   33 floor/top light   34-37 side light -x +x -y +y
+;;  38-39 sheen centre (tile coords)   40-41 shadow step per unit height (tile coords)
+;;  42-43 quantized tilt   44 depth scale at z=0 centre
+(def P (double-array 48))
+(def clear (int-array w/N))       ; 1: flat felt with no column within a ray's reach
+(def ^:private dirty (atom true))
+(def ^:private last-scr (atom nil))
+(def on? (atom false))
+
+(defn- norm3 [x y z] (let [l (math/sqrt (+ (* x x) (* y y) (* z z)))] [(/ x l) (/ y l) (/ z l)]))
+
+(defn column-height
+  "Default height of a tile type."
+  [t]
+  (cond (= t w/WALL) WALL-H
+        (= t w/PIT) (- PIT-D)
+        (= t w/LAMP) 0.9
+        (= t w/HARD) 1.8
+        (= t w/EMPTY) 0.0
+        (= t w/GHOST) 0.0
+        (and (>= t w/BIT) (<= t w/CUP)) 0.0     ; orrery triggers lie flat
+        (= t w/HOPPER) WALL-H
+        :else 1.3))
+
+(defn- refresh-heights!
+  "hbase from the tile types (and the level's :hmap digits)."
+  []
+  (let [hm @hmap]
+    (dotimes [i w/N]
+      (let [t (aget w/tt i)
+            h (column-height t)
+            h (if (and hm (> h 0.0))
+                (let [ch (nth (nth hm (quot i w/G)) (mod i w/G))]
+                  (if (and (>= (int ch) 49) (<= (int ch) 57)) (* UNIT-H (- (int ch) 48)) h))
+                h)]
+        (aset hbase i h)
+        (aset hts i (+ h (aget ring (* 2 i))))))))
+
+;; ---------------------------------------------------------------------------
+;; camera
+
+(defn- inverse-map!
+  "Adjugate of the plane z = h's projective map into P[off..off+8]."
+  [off h]
+  (let [F (aget P 9) D (aget P 10)
+        m00 (* F (aget P 0)) m01 (* F (aget P 1)) m02 (* F h (aget P 2))
+        m10 (* F (aget P 3)) m11 (* F (aget P 4)) m12 (* F h (aget P 5))
+        m20 (- (aget P 6)) m21 (- (aget P 7)) m22 (- D (* h (aget P 8)))]
+    (aset P off (- (* m11 m22) (* m12 m21)))
+    (aset P (+ off 1) (- (* m02 m21) (* m01 m22)))
+    (aset P (+ off 2) (- (* m01 m12) (* m02 m11)))
+    (aset P (+ off 3) (- (* m12 m20) (* m10 m22)))
+    (aset P (+ off 4) (- (* m00 m22) (* m02 m20)))
+    (aset P (+ off 5) (- (* m02 m10) (* m00 m12)))
+    (aset P (+ off 6) (- (* m10 m21) (* m11 m20)))
+    (aset P (+ off 7) (- (* m01 m20) (* m00 m21)))
+    (aset P (+ off 8) (- (* m00 m11) (* m01 m10)))))
+
+(defn- face-light [nx ny nz]
+  ;; normalised so the untilted floor is exactly 1.0 (zero tilt matches 2D)
+  (let [d (+ (* nx (aget P 30)) (* ny (aget P 31)) (* nz (aget P 32)))]
+    (/ (+ AMB (* DIF (max 0.0 d))) (+ AMB (* DIF LZ)))))
+
+(defn- sgn [x] (if (> x 0.0) 1 (if (< x 0.0) -1 0)))
+
+(defn- col-at? [x y]
+  (and (>= x 0) (< x 24) (>= y 0) (< y 24) (> (aget hts (+ x (* y 24))) 0.0)))
+
+(defn- box-count-tall
+  "Columns at least hmin tall within two tiles of (x, y)."
+  [x y hmin]
+  (loop [yy (max 0 (- y 2)) n 0]
+    (if (> yy (min 23 (+ y 2)))
+      n
+      (recur (inc yy)
+             (loop [xx (max 0 (- x 2)) n n]
+               (if (> xx (min 23 (+ x 2)))
+                 n
+                 (recur (inc xx) (if (>= (aget hts (+ xx (* yy 24))) hmin) (inc n) n))))))))
+
+(defn- clear-flags!
+  "A floor tile is clear when no column can stand in the way of a ray that
+   lands on it, or shade it: its pixels skip the grid walk. Going up from
+   the floor a ray drifts toward the camera's foot on the tilted board (the
+   nadir) by d/hc per unit of height (d: distance to the nadir, hc: camera
+   height over the plane). Within a one-tile reach only the neighbours on
+   the nadir side matter; shadows only look toward the light (the probe is
+   kept under a tile). If the tallest column could reach two tiles, columns
+   that tall within two tiles also count; three never happens at these
+   settings, and if it did, nothing would be clear."
+  [H]
+  (let [D (aget P 10) hc (* D (aget P 8))
+        ;; the camera's foot on the board plane: C_b = R^T (0 0 D)
+        nx (+ 12.0 (* 0.5 D (aget P 6))) ny (+ 12.0 (* 0.5 D (aget P 7)))
+        lx (sgn (aget P 40)) ly (sgn (aget P 41))]
+    (dotimes [i w/N]
+      (let [x (mod i 24) y (quot i 24)
+            dx (if (< nx x) -1 (if (>= nx (inc x)) 1 0))
+            dy (if (< ny y) -1 (if (>= ny (inc y)) 1 0))
+            ;; farthest point of the tile from the nadir, world units
+            fx (max (math/abs (- x nx)) (math/abs (- (inc x) nx)))
+            fy (max (math/abs (- y ny)) (math/abs (- (inc y) ny)))
+            reach (/ (* H 2.0 (math/sqrt (+ (* fx fx) (* fy fy)))) (* 2.0 hc))]   ; tiles
+        (aset clear i (if (and (< reach 2.0)
+                               (== 0.0 (aget hts i))
+                               (not (col-at? (+ x dx) y)) (not (col-at? x (+ y dy)))
+                               (not (col-at? (+ x dx) (+ y dy)))
+                               (not (col-at? (+ x lx) y)) (not (col-at? x (+ y ly)))
+                               (not (col-at? (+ x lx) (+ y ly)))
+                               (or (< reach 1.0)
+                                   ;; tall enough to reach 2 tiles: h * reach / H >= 1
+                                   (== 0 (box-count-tall x y (/ H reach)))))
+                        1 0))))))
+
+(defn- camera!
+  "Set R, the inverse maps, the light and the sheen for tilt (qx, qy)."
+  [scr qx qy]
+  (let [a1 (* qx TILT-MAX) a2 (* qy TILT-MAX)
+        c1 (math/cos a1) s1 (math/sin a1) c2 (math/cos a2) s2 (math/sin a2)
+        R [c1 0.0 s1
+           (- (* s1 s2)) c2 (* c1 s2)
+           (- (* s1 c2)) (- s2) (* c1 c2)]
+        D CAM-D F (* FIT CAM-D)
+        H (loop [i 0 m 0.0] (if (< i w/N) (recur (inc i) (max m (aget hts i))) m))
+        H (max H 0.5)]
+    (dotimes [i 9] (aset P i (double (nth R i))))
+    (aset P 9 F) (aset P 10 D) (aset P 11 H)
+    (inverse-map! 12 H)
+    (inverse-map! 21 0.0)
+    ;; light into the board frame: Lb = R^T L
+    (let [[lx ly lz] (norm3 LX LY LZ)
+          bx (+ (* (aget P 0) lx) (* (aget P 3) ly) (* (aget P 6) lz))
+          by (+ (* (aget P 1) lx) (* (aget P 4) ly) (* (aget P 7) lz))
+          bz (+ (* (aget P 2) lx) (* (aget P 5) ly) (* (aget P 8) lz))]
+      (aset P 30 bx) (aset P 31 by) (aset P 32 bz)
+      (aset P 33 (face-light 0.0 0.0 1.0))
+      (aset P 34 (face-light -1.0 0.0 0.0)) (aset P 35 (face-light 1.0 0.0 0.0))
+      (aset P 36 (face-light 0.0 -1.0 0.0)) (aset P 37 (face-light 0.0 1.0 0.0))
+      ;; walking toward the light from the floor climbs 1 unit per (bx,by)/bz;
+      ;; the far probe (1.8 units up) stays within a tile so clear tiles can
+      ;; skip it (shadows shorten a little at grazing light)
+      (let [sx (* 0.5 (/ bx bz)) sy (* 0.5 (/ by bz))
+            f (min 1.0 (/ 0.95 (* 1.8 (max 1e-6 (math/sqrt (+ (* sx sx) (* sy sy)))))))]
+        (aset P 40 (* f sx)) (aset P 41 (* f sy))))
+    ;; sheen: mirror the lamp in the board plane, aim it at the camera
+    (let [nx (aget P 2) ny (aget P 5) nz (aget P 8)
+          dn (+ (* PLX nx) (* PLY ny) (* PLZ nz))
+          mx (- PLX (* 2.0 dn nx)) my (- PLY (* 2.0 dn ny)) mz (- PLZ (* 2.0 dn nz))
+          ;; camera C = (0 0 D); X = C + t (M - C) on the plane n.X = 0
+          t (/ (- (* nz D)) (+ (* nx mx) (* ny my) (* nz (- mz D))))
+          X (* t mx) Y (* t my) Z (+ D (* t (- mz D)))
+          bx (+ (* (aget P 0) X) (* (aget P 3) Y) (* (aget P 6) Z))
+          by (+ (* (aget P 1) X) (* (aget P 4) Y) (* (aget P 7) Z))]
+      (aset P 38 (* 0.5 (+ bx 24.0))) (aset P 39 (* 0.5 (+ by 24.0))))
+    (aset P 42 qx) (aset P 43 qy)
+    (clear-flags! H)
+    ;; sprites: gfx/w->s projects with these
+    (let [xf (:xf scr)]
+      (aset xf 3 1.0) (aset xf 4 F) (aset xf 5 D)
+      (dotimes [i 9] (aset xf (+ 6 i) (aget P i)))
+      (aset xf 15 0.0))))
+
+;; ---------------------------------------------------------------------------
+;; shading
+
+(def ^:private lut gfx/post-lut)
+
+(defmacro ^:private lit*
+  "Packed colour c times m (>= 0), plus a grey a (>= 0), posterized: gfx/post
+   inlined, for the per-pixel paths."
+  [c m a]
+  `(let [c# ~c m# ~m a# ~a
+         r# (+ (* m# (bit-and (bit-shift-right c# 16) 255)) a#)
+         g# (+ (* m# (bit-and (bit-shift-right c# 8) 255)) a#)
+         b# (+ (* m# (bit-and c# 255)) (* 0.8 a#))]
+     (bit-or (bit-or (bit-shift-left (aget lut (if (> r# 255.0) 255 (int r#))) 16)
+                     (bit-shift-left (aget lut (if (> g# 255.0) 255 (int g#))) 8))
+             (aget lut (if (> b# 255.0) 255 (int b#))))))
+
+(defn- lit
+  "lit* as a function (m and a >= 0)."
+  [c ^double m ^double a]
+  (lit* c (max 0.0 m) a))
+
+(defn- tile-h [ix iy]
+  (if (and (>= ix 0) (< ix 24) (>= iy 0) (< iy 24)) (aget hts (+ ix (* iy 24))) 0.0))
+
+(def ^:private WC (object-array 1))   ; the screen's world-pixel cache, set per render
+(def ^:private SI (int-array 1))      ; and its width S
+
+(defn- cache-at
+  "World-pixel cache colour at tile coords (gx, gy). P[45] = 2k, P[46] = S."
+  [scr ^double gx ^double gy]
+  (let [k2 (aget P 45) S (int (aget P 46))
+        u (int (* gx k2)) v (int (* gy k2))
+        u (if (< u 0) 0 (if (>= u S) (dec S) u))
+        v (if (< v 0) 0 (if (>= v S) (dec S) v))]
+    (aget (aget WC 0) (+ u (* v S)))))
+
+(defn- sheen [^double gx ^double gy]
+  (let [dx (- gx (aget P 38)) dy (- gy (aget P 39))
+        d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)]
+    (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)))
+
+(defn- floor-col
+  "The felt (or a pit) at tile coords (bx, by); (ax, ay) is where the same
+   ray crossed the top plane."
+  [scr ^double ax ^double ay ^double bx ^double by]
+  (cond
+    (or (< bx 0.0) (>= bx 24.0) (< by 0.0) (>= by 24.0))
+    ;; off the board: the slab's edge, or the dark around the table
+    (let [f (/ SLAB (aget P 11))
+          cx (+ bx (* f (- bx ax))) cy (+ by (* f (- by ay)))]
+      (if (and (>= cx 0.0) (< cx 24.0) (>= cy 0.0) (< cy 24.0))
+        (let [face (cond (< bx 0.0) 34 (>= bx 24.0) 35 (< by 0.0) 36 :else 37)
+              ;; how far down the edge the ray lands (0 top .. 1 foot)
+              e (cond (< bx 0.0) (/ (- bx) (- cx bx)) (>= bx 24.0) (/ (- bx 24.0) (- bx cx))
+                      (< by 0.0) (/ (- by) (- cy by)) :else (/ (- by 24.0) (- by cy)))]
+          (lit SLAB-C (* (aget P face) (- 1.0 (* 0.45 e))) 0.0))
+        (let [c @w/outside] (gfx/post (gfx/cr c) (gfx/cg c) (gfx/cb c)))))
+    :else
+    (let [ix (int bx) iy (int by) h (aget hts (+ ix (* iy 24)))]
+      (if (< h 0.0)
+        ;; a pit: a square hole PIT-D deep
+        (let [f (/ (- h) (aget P 11))
+              dx (- bx ax) dy (- by ay)
+              cx (+ bx (* f dx)) cy (+ by (* f dy))]
+          (if (and (== ix (int (math/floor cx))) (== iy (int (math/floor cy))))
+            (lit (cache-at scr bx by) 0.35 0.0)
+            ;; the far inner wall: which side the ray leaves through, how deep
+            (let [ex (cond (> dx 0.0) (/ (- (+ ix 1.0) bx) (* f dx)) (< dx 0.0) (/ (- ix bx) (* f dx)) :else 9.0)
+                  ey (cond (> dy 0.0) (/ (- (+ iy 1.0) by) (* f dy)) (< dy 0.0) (/ (- iy by) (* f dy)) :else 9.0)
+                  face (if (< ex ey) (if (> dx 0.0) 34 35) (if (> dy 0.0) 36 37))
+                  e (min ex ey)]
+              (lit PIT-WALL (* (aget P face) (- 1.0 (* 0.7 e))) 0.0))))
+        (let [;; cast shadow: step toward the light, look for a column that tall
+              sx (aget P 40) sy (aget P 41)
+              h1 (tile-h (int (math/floor (+ bx (* 0.8 sx)))) (int (math/floor (+ by (* 0.8 sy)))))
+              h2 (tile-h (int (math/floor (+ bx (* 1.8 sx)))) (int (math/floor (+ by (* 1.8 sy)))))
+              sh (- 1.0 (if (>= h1 0.8) 0.22 0.0) (if (>= h2 1.8) 0.18 0.0))]
+          (lit (cache-at scr bx by) (* (aget P 33) sh) (sheen bx by)))))))
+
+(defn- top-col [scr ^double gx ^double gy]
+  (lit (cache-at scr gx gy) (* 1.08 (aget P 33)) (* 0.6 (sheen gx gy))))
+
+(defn- side-col
+  "Side face (light slot 34..37) of tile (ix, iy), hit at height z."
+  [ix iy face ^double z]
+  (let [i (+ ix (* iy 24)) h (aget hts i)
+        c (aget w/tbase i)
+        ao (+ 0.5 (* 0.5 (/ z (max 0.3 h))))]
+    (lit c (* (aget P face) ao) 0.0)))
+
+(defn sample3
+  "Colour for the ray through top-plane point (ax, ay) and floor point
+   (bx, by), tile coords."
+  [scr ^double ax ^double ay ^double bx ^double by]
+  (let [H (aget P 11)
+        ix (int (math/floor ax)) iy (int (math/floor ay))]
+    (if (and (== ix (int (math/floor bx))) (== iy (int (math/floor by))))
+      ;; the whole ray stays over one tile (most pixels): inlined
+      (let [h (tile-h ix iy)]
+        (cond
+          (> h 0.0)
+          (let [t (- 1.0 (/ h H))
+                gx (+ ax (* t (- bx ax))) gy (+ ay (* t (- by ay)))
+                k2 (aget P 45) S (aget SI 0)
+                dx (- gx (aget P 38)) dy (- gy (aget P 39))
+                d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)
+                a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* 0.6 SPEC f f)) 0.0)]
+            (lit* (aget (aget WC 0) (+ (int (* gx k2)) (* S (int (* gy k2))))) (* 1.08 (aget P 33)) a))
+          (or (< h 0.0) (< ix 0) (> ix 23) (< iy 0) (> iy 23))
+          (floor-col scr ax ay bx by)
+          :else
+          (let [sx (aget P 40) sy (aget P 41)
+                h1 (tile-h (int (math/floor (+ bx (* 0.8 sx)))) (int (math/floor (+ by (* 0.8 sy)))))
+                h2 (tile-h (int (math/floor (+ bx (* 1.8 sx)))) (int (math/floor (+ by (* 1.8 sy)))))
+                sh (- 1.0 (if (>= h1 0.8) 0.22 0.0) (if (>= h2 1.8) 0.18 0.0))
+                k2 (aget P 45) S (aget SI 0)
+                dx (- bx (aget P 38)) dy (- by (aget P 39))
+                d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)
+                a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)]
+            (lit* (aget (aget WC 0) (+ (int (* bx k2)) (* S (int (* by k2))))) (* (aget P 33) sh) a))))
+      ;; grid walk from the top plane down to the floor
+      (let [dx (- bx ax) dy (- by ay)
+            sx (if (> dx 0.0) 1 -1) sy (if (> dy 0.0) 1 -1)
+            tdx (if (== dx 0.0) 1e9 (/ 1.0 (math/abs dx)))
+            tdy (if (== dy 0.0) 1e9 (/ 1.0 (math/abs dy)))]
+        (loop [ix ix iy iy tin 0.0 face 0
+               tmx (cond (> dx 0.0) (* (- (+ ix 1.0) ax) tdx) (< dx 0.0) (* (- ax ix) tdx) :else 1e9)
+               tmy (cond (> dy 0.0) (* (- (+ iy 1.0) ay) tdy) (< dy 0.0) (* (- ay iy) tdy) :else 1e9)]
+          (let [h (tile-h ix iy)
+                zin (* H (- 1.0 tin))
+                tout (min 1.0 (min tmx tmy))]
+            (cond
+              (and (> h 0.0) (>= h zin))
+              (if (== 0 face)
+                (top-col scr ax ay)
+                (side-col ix iy face zin))
+              (and (> h 0.0) (>= h (* H (- 1.0 tout))))
+              (let [t (- 1.0 (/ h H))]
+                (top-col scr (+ ax (* t dx)) (+ ay (* t dy))))
+              (>= tout 1.0) (floor-col scr ax ay bx by)
+              (< tmx tmy) (recur (+ ix sx) iy tmx (if (> sx 0) 34 35) (+ tmx tdx) tmy)
+              :else (recur ix (+ iy sy) tmy (if (> sy 0) 36 37) tmx (+ tmy tdy)))))))))
+
+(defn render!
+  "Draw the board into (:b3 scr) in blocks of bs x bs pixels (bs 1 or 2),
+   for pixel rows y0, y0 + ystep, ... (each row renders a bs-tall band);
+   mark the cells whose colour changed."
+  [scr bs y0 ystep]
+  (let [k (:k scr) S (:S scr) cols (:cols scr)
+        b3 (:b3 scr) mark (:mark scr) rmark (:rmark scr)
+        kinv (/ 1.0 k) du (* bs kinv) half (* 0.5 bs)
+        wc (:wcache scr) k2 (* 2.0 k) m0 (aget P 33) r2 (* SPEC-R SPEC-R)
+        sx0 (aget P 38) sy0 (aget P 39)
+        h00 (aget P 12) h01 (aget P 13) h02 (aget P 14)
+        h10 (aget P 15) h11 (aget P 16) h12 (aget P 17)
+        h20 (aget P 18) h21 (aget P 19) h22 (aget P 20)
+        f00 (aget P 21) f01 (aget P 22) f02 (aget P 23)
+        f10 (aget P 24) f11 (aget P 25) f12 (aget P 26)
+        f20 (aget P 27) f21 (aget P 28) f22 (aget P 29)]
+    (aset WC 0 wc) (aset SI 0 S) (aset P 45 k2) (aset P 46 (double S))
+    (loop [y y0]
+      (when (< y S)
+        (let [v (- (* (+ y half) kinv) 24.0)
+              u0 (- (* half kinv) 24.0)
+              cy (quot y 2) crow (* cy cols) prow (* y S)]
+          ;; homogeneous coordinates, stepped along the row
+          (loop [x 0
+                 hx (+ (* h00 u0) (* h01 v) h02) hy (+ (* h10 u0) (* h11 v) h12) hw (+ (* h20 u0) (* h21 v) h22)
+                 fx (+ (* f00 u0) (* f01 v) f02) fy (+ (* f10 u0) (* f11 v) f12) fw (+ (* f20 u0) (* f21 v) f22)]
+            (when (< x S)
+              (let [fi (/ 0.5 fw)
+                    bx (+ 12.0 (* fx fi)) by (+ 12.0 (* fy fi))
+                    c (if (and (>= bx 0.0) (< bx 24.0) (>= by 0.0) (< by 24.0)
+                               (== 1 (aget clear (+ (int bx) (* 24 (int by))))))
+                        ;; clear felt: no column can be in the way or cast a shadow
+                        (let [dx (- bx sx0) dy (- by sy0)
+                              d2 (* 4.0 (+ (* dx dx) (* dy dy)))
+                              a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)]
+                          (lit* (aget wc (+ (int (* bx k2)) (* S (int (* by k2))))) m0 a))
+                        (let [ih (/ 0.5 hw)]
+                          (sample3 scr (+ 12.0 (* hx ih)) (+ 12.0 (* hy ih)) bx by)))
+                    i (+ x prow)]
+                (when (not (= c (aget b3 i)))
+                  (aset b3 i c)
+                  (if (= bs 2)
+                    (let [ci (+ x crow)]
+                      (aset b3 (inc i) c) (aset b3 (+ i S) c) (aset b3 (+ i S 1) c)
+                      (aset mark ci 1) (aset mark (inc ci) 1) (aset rmark cy 1))
+                    (do (aset mark (+ x crow) 1) (aset rmark cy 1)))))
+              (recur (+ x bs)
+                     (+ hx (* h00 du)) (+ hy (* h10 du)) (+ hw (* h20 du))
+                     (+ fx (* f00 du)) (+ fy (* f10 du)) (+ fw (* f20 du))))))
+        (recur (+ y ystep))))))
+
+;; ---------------------------------------------------------------------------
+;; game API
+
+(defn enable!
+  "Turn the 3D table on for a freshly loaded level (hm: the level's :hmap)."
+  [scr hm]
+  (reset! on? true)
+  (reset! hmap hm)
+  (dotimes [i (* 2 w/N)] (aset ring i 0.0))
+  (reset! ringing 0)
+  (refresh-heights!)
+  (camera! scr 0.0 0.0)
+  (reset! last-scr nil)
+  (reset! dirty true))
+
+(defn disable! [scr]
+  (reset! on? false)
+  (aset (:xf scr) 3 0.0))
+
+(defn touch!
+  "A tile changed: heights and the board image need a refresh."
+  []
+  (reset! dirty true))
+
+(defn ring!
+  "Make tile i's column ring (wobble its height) with strength a (0..1);
+   soft knocks (a marble resting against it) don't ring."
+  [i a]
+  (when (and (> (aget hbase i) 0.0) (> a 0.25))
+    (when (< (aget ring (* 2 i)) 1e-3) (swap! ringing inc))
+    (aset ring (* 2 i) (* a 0.9))
+    (aset ring (inc (* 2 i)) 0.0)))
+
+(defn- update-ring!
+  "Advance the wobbles; true while any column still rings."
+  [dt]
+  (when (pos? @ringing)
+    (let [n (loop [i 0 n 0]
+              (if (< i w/N)
+                (let [j (* 2 i) a (aget ring j)]
+                  (if (> (math/abs a) 1e-3)
+                    (let [t (+ (aget ring (inc j)) dt)
+                          a0 (* a (math/exp (* -5.0 dt)))
+                          ;; amplitude decays; the height swings at ~6 Hz
+                          wob (* a0 (math/cos (* 38.0 t)))]
+                      (aset ring j a0) (aset ring (inc j) t)
+                      (aset hts i (max 0.2 (+ (aget hbase i) wob)))
+                      (if (< a0 0.02)
+                        (do (aset ring j 0.0) (aset hts i (aget hbase i)) n)
+                        (inc n)))
+                    (recur (inc i) n)))
+                n))]
+      (reset! ringing n)
+      true)))
+
+(def ^:private last-ns (atom 0))
+(def ^:private todo (atom []))      ; render passes still owed to the current camera
+(def ^:private phase (atom 0))      ; which coarse half went first last time
+
+(def ^:private REFINE [[1 0 4] [1 1 4] [1 2 4] [1 3 4]])   ; full-res, a quarter per frame
+
+(defn frame!
+  "Before the sprites, bring the board image up to date, one render pass per
+   frame. A tilt step (or a ringing column) moves the camera and renders half
+   the coarse block rows, alternating halves; a tile change re-renders all of
+   them. Once the camera holds, the other half and then four full-resolution
+   passes follow on later frames. Returns true when it rendered."
+  [scr tx ty]
+  (let [qx (* Q (math/round (/ tx Q))) qy (* Q (math/round (/ ty Q)))
+        now (System/nanoTime)
+        dt (min 0.05 (/ (- now @last-ns) 1e9))
+        _ (reset! last-ns now)
+        rang? (update-ring! dt)
+        full? (or @dirty (not (identical? scr @last-scr)))
+        moved? (or rang? (not (== qx (aget P 42))) (not (== qy (aget P 43))))]
+    (cond
+      full?
+      (do (refresh-heights!)
+          (reset! dirty false)
+          (reset! last-scr scr)
+          (camera! scr qx qy)
+          (render! scr 2 0 2)
+          (reset! todo REFINE)
+          true)
+      moved?
+      (let [p (- 2 @phase)]
+        (reset! phase p)
+        (camera! scr qx qy)
+        (render! scr 2 p 4)
+        (reset! todo (into [[2 (- 2 p) 4]] REFINE))
+        true)
+      (seq @todo)
+      (let [[bs y0 ys] (first @todo)]
+        (swap! todo #(subvec % 1))
+        (render! scr bs y0 ys)
+        true)
+      :else false)))
+
+;; ---------------------------------------------------------------------------
+;; the marble: a lit sphere with a cast shadow
+
+(defn- floor-px
+  "Screen pixel -> board floor point (tile coords) through the z = 0 map."
+  [^double px ^double py k]
+  (let [u (- (/ px k) 24.0) v (- (/ py k) 24.0)
+        X (+ (* (aget P 21) u) (* (aget P 22) v) (aget P 23))
+        Y (+ (* (aget P 24) u) (* (aget P 25) v) (aget P 26))
+        W (+ (* (aget P 27) u) (* (aget P 28) v) (aget P 29))]
+    [(+ 12.0 (* 0.5 (/ X W))) (+ 12.0 (* 0.5 (/ Y W)))]))
+
+(defn shadow!
+  "Soft elliptical shadow of a sphere of radius r resting at world (wx, wy):
+   the sphere's shadow on the board, stretched away from the light.
+   Darkens the light buffer by a fraction of the board colour under it."
+  [scr ^double wx ^double wy ^double r ^double strength]
+  (let [k (:k scr) S (:S scr) cols (:cols scr) b3 (:b3 scr)
+        lbx (aget P 30) lby (aget P 31) lbz (aget P 32)
+        ;; shadow centre in tile coords: the centre (height r) pushed along -L
+        gx (* 0.5 (- wx (* r (/ lbx lbz)))) gy (* 0.5 (- wy (* r (/ lby lbz))))
+        ;; light direction across the board, for the stretch
+        ll (math/sqrt (+ (* lbx lbx) (* lby lby)))
+        ux (if (> ll 1e-6) (/ lbx ll) 1.0) uy (if (> ll 1e-6) (/ lby ll) 0.0)
+        rg (* 0.5 r 1.25) rg2 (* rg rg)
+        [sx sy] (let [xf (:xf scr) z (aget xf 15)]
+                  (aset xf 15 0.0)
+                  (let [p (gfx/w->s scr (* 2.0 gx) (* 2.0 gy))] (aset xf 15 z) p))
+        cx (* sx k) cy (* sy k)
+        rp (* 3.0 r k)
+        x0 (max 0 (int (- cx rp))) x1 (min (dec S) (int (+ cx rp)))
+        y0 (max 0 (int (- cy rp))) y1 (min (dec S) (int (+ cy rp)))
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr)]
+    (loop [y y0]
+      (when (<= y y1)
+        (loop [x x0]
+          (when (<= x x1)
+            (let [[px py] (floor-px (+ x 0.5) (+ y 0.5) k)
+                  dx (- px gx) dy (- py gy)
+                  par (+ (* dx ux) (* dy uy)) per (- (* dy ux) (* dx uy))
+                  par (* par lbz)            ; stretched along the light
+                  d2 (/ (+ (* par par) (* per per)) rg2)]
+              (when (< d2 1.0)
+                (let [i (+ x (* y S)) c (aget b3 i)
+                      f (* strength (- 1.0 (* d2 d2)))
+                      cyc (quot y 2)]
+                  (aset ar i (- (aget ar i) (* f (gfx/cr c))))
+                  (aset ag i (- (aget ag i) (* f (gfx/cg c))))
+                  (aset ab i (- (aget ab i) (* f (gfx/cb c))))
+                  (aset mark (+ x (* cyc cols)) 1)
+                  (aset rmark cyc 1))))
+            (recur (inc x))))
+        (recur (inc y))))))
+
+(defn depth-scale
+  "Perspective size of something at world (wx, wy) and height z, relative to
+   the untilted board (1.0 at the board plane with no tilt)."
+  [^double wx ^double wy ^double z]
+  (let [x (- wx 24.0) y (- wy 24.0)
+        Z (+ (* (aget P 6) x) (* (aget P 7) y) (* (aget P 8) z))]
+    (/ CAM-D (- CAM-D Z))))
+
+(defn marble!
+  "A marble of radius r at world (wx, wy) in colour c: shadow, then the
+   sphere (glyph core and halo at its projected 3D centre, sized by depth),
+   then a glint toward the light."
+  [scr ^double wx ^double wy ^double r c ^double halo]
+  (shadow! scr wx wy r 0.6)
+  (let [xf (:xf scr)
+        s (depth-scale wx wy r)
+        lbx (aget P 30) lby (aget P 31)]
+    (aset xf 15 r)
+    (gfx/ball! scr wx wy (* halo s) (* r s) c 1.0)
+    ;; the glint sits on the sphere toward the light
+    (gfx/glow! scr (+ wx (* 0.5 r lbx)) (+ wy (* 0.5 r lby)) (* 0.5 s) (* 0.14 s) 0xffffff 0.55)
+    (aset xf 15 0.0)))

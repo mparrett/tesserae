@@ -1,12 +1,17 @@
 (ns main
-  (:require [tesserae.game :as game] [tesserae.editor :as editor] [tesserae.custom :as custom] [clojure.string] [js]))
+  (:require [tesserae.game :as game] [tesserae.editor :as editor] [tesserae.custom :as custom]
+            [tesserae.levels :as L] [clojure.string] [js]))
 
 (defn parse-args [args]
   (loop [as args o {}]
     (if (empty? as) o
         (let [[a b] as]
           (case a
-            "--level" (recur (drop 2 as) (assoc o :level (dec (parse-long b))))
+            ;; --level 4 (the 4th level) or --level 4.3 (a level id, incl. special levels)
+            "--level" (recur (drop 2 as) (if (clojure.string/includes? (str b) ".")
+                                           (assoc o :level-id b)
+                                           (assoc o :level (dec (parse-long b)))))
+            "--3d" (recur (rest as) (assoc o :view3d true))                ; 3D tilt table
             "--autoplay" (recur (rest as) (assoc o :autoplay true))
             "--skip-card" (recur (rest as) (assoc o :skip-card true))
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))
@@ -30,12 +35,22 @@
             (when-let [v (js/url-param p)]
               (if takes-val? [(str "--" p) v] [(str "--" p)])))
           [["level" true] ["fps" true] ["seconds" true] ["glyphs" true]
-           ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
+           ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false] ["3d" false]
            ["reset-progress" false]]))
 
 (defn fail! [msg]
   (println (str "tesserae: " msg))
   (os/exit 1))
+
+(defn resolve-level-id
+  "--level 4.3: a numbered level by its id, or a special level."
+  [o]
+  (if-let [id (:level-id o)]
+    (let [j (first (keep-indexed (fn [j l] (when (= id (:id l)) j)) L/levels))]
+      (cond j (assoc o :level j)
+            (L/special-level id) (assoc o :special (L/special-level id))
+            :else (fail! (str "no level " id))))
+    o))
 
 (defn run-main! [o]
   (cond
@@ -44,7 +59,7 @@
                     (if error
                       (fail! error)
                       (game/main! (assoc o :custom (custom/->level doc)))))
-    :else (game/main! o)))
+    :else (game/main! (resolve-level-id o))))
 
 ;; lg -w / -c evaluate the file while compiling; only run the game for real.
 (when-not *compiling-aot*

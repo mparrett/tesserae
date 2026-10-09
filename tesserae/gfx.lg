@@ -130,7 +130,8 @@
      :gmode gmode :gcode gcode :gstr gstr  ; sub-cell sprite glyphs
      :smask (int-array ncell) :scol (int-array ncell)
      :chord (double-array 32)      ; shape-disc! scanline scratch: lo 0.., hi 16..
-     :xf (double-array 3)         ; [cos sin identity?] of the field angle
+     :xf (double-array 16)        ; [cos sin identity?] of the field angle; 3.. the 3D table (see w->s)
+     :b3 (int-array npx)          ; 3D table: lit colour per *screen* pixel (tesserae.table3d)
      :wcache (int-array npx)      ; posterized static colour per *world* pixel
      :sgr-cache (volatile! {})
      :full (atom true)
@@ -177,10 +178,23 @@
 (defn invalidate! [scr] (reset! (:full scr) true))
 
 ;; world -> screen units (unscaled), and back. Rotation about (24,24).
-(defn w->s [scr ^double wx ^double wy]
-  (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
-        dx (- wx HALFW) dy (- wy HALFW)]
-    [(+ HALFW (- (* c dx) (* s dy))) (+ HALFW (+ (* s dx) (* c dy)))]))
+(defn w->s
+  "World point to screen units. With the 3D table on (xf[3] = 1, set by
+   tesserae.table3d) this is a perspective projection of the point at height
+   xf[15] above the tilted board: xf[4] focal F, xf[5] camera distance D,
+   xf[6..14] the board rotation R (row-major)."
+  [scr ^double wx ^double wy]
+  (let [xf (:xf scr)]
+    (if (== 1.0 (aget xf 3))
+      (let [x (- wx HALFW) y (- wy HALFW) z (aget xf 15)
+            X (+ (* (aget xf 6) x) (* (aget xf 7) y) (* (aget xf 8) z))
+            Y (+ (* (aget xf 9) x) (* (aget xf 10) y) (* (aget xf 11) z))
+            Z (+ (* (aget xf 12) x) (* (aget xf 13) y) (* (aget xf 14) z))
+            q (/ (aget xf 4) (- (aget xf 5) Z))]
+        [(+ HALFW (* q X)) (+ HALFW (* q Y))])
+      (let [c (aget xf 0) s (aget xf 1)
+            dx (- wx HALFW) dy (- wy HALFW)]
+        [(+ HALFW (- (* c dx) (* s dy))) (+ HALFW (+ (* s dx) (* c dy)))]))))
 
 (defn s->w [scr ^double sx ^double sy]
   (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
@@ -422,6 +436,7 @@
         start-len (.length sb)
         k (:k scr) kinv (/ 1.0 k)
         xf (:xf scr) c (aget xf 0) s (aget xf 1) ident? (== 1.0 (aget xf 2))
+        t3? (== 1.0 (aget xf 3)) b3 (:b3 scr)   ; 3D table: base comes from b3
         wc (:wcache scr)
         ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
         px (fn [x y]
@@ -429,6 +444,7 @@
                    o (aget ovr i)
                    base (cond
                           (>= o 0) o
+                          t3? (aget b3 i)
                           ident? (aget wc i)
                           :else
                           (let [X (- (* (+ x 0.5) kinv) HALFW) Y (- (* (+ y 0.5) kinv) HALFW)

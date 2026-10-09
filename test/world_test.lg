@@ -34,7 +34,7 @@
     (w/count-where #(and (pos? %) (not= % w/WALL) (not= % w/PIT)))))
 
 (deftest maps-are-valid
-  (doseq [[j l] (map-indexed vector (conj L/levels L/title-level))]
+  (doseq [[j l] (map-indexed vector (concat L/levels [L/title-level] L/special-levels))]
     (testing (str (:id l) " " (:name l))
       (is (= 24 (count (:map l))) "24 rows")
       (is (every? #(= 24 (count %)) (:map l)) "24 cols per row")
@@ -67,7 +67,16 @@
 
 (deftest levels-have-metadata
   (is (= (count L/levels) (count (distinct (map :id L/levels)))) "level ids are unique")
-  (doseq [l L/levels]
+  (doseq [l (concat L/levels L/special-levels)]
     (testing (:id l)
       (is (and (number? (:par l)) (pos? (:par l))) "a positive :par (seconds)")
       (is (contains? L/themes (:theme l))))))
+
+(deftest special-levels-are-apart
+  (doseq [l L/special-levels]
+    (testing (:id l)
+      (is (not-any? #(= (:id l) (:id %)) L/levels) "a special id is not a numbered level's")
+      (is (= l (L/special-level (:id l))) "found by id")
+      (when (:hmap l)
+        (is (= 24 (count (:hmap l))) "24 hmap rows")
+        (is (every? #(= 24 (count %)) (:hmap l)) "24 hmap cols per row")))))

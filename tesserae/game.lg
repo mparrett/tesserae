@@ -11,6 +11,7 @@
             [tesserae.input :as in]
             [tesserae.levels :as L]
             [tesserae.meta :as M]
+            [tesserae.table3d :as t3]
             [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -40,6 +41,11 @@
 (defn lv [k] (get (lvl) k))
 
 (defn theme [] (get L/themes (or (lv :theme) :indigo)))
+
+(defn view3d?
+  "The 3D tilt table (spike): a level's :view3d, or --3d on any tilt level."
+  []
+  (boolean (and (lv :tilt) (or (lv :view3d) (:view3d @opts)))))
 
 ;; meta layer hooks (defined in the "meta layer" section near the end)
 (declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?
@@ -229,6 +235,8 @@
         nil)
 
       :else (do (burst! cx cy 0x8090a0 2 6.0)
+                (when (and @t3/on? (= t w/WALL))     ; 3D table: the wall rings
+                  (t3/ring! i (min 1.0 (/ (math/abs (second @hit-ctx)) 30.0))))
                 (when (and (lv :ward) (= t w/WALL)) (swap! S assoc :combo 0))
                 nil))))
 
@@ -517,6 +525,7 @@
     (when (:orrery l) (orrery-init! l))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
+    (if (view3d?) (t3/enable! @scr (lv :hmap)) (t3/disable! @scr))
     (spawn-balls!)
     (when (:ward l) (choose-ward!))
     (recount-goal!)
@@ -1653,9 +1662,11 @@
         (gfx/glow! sc wx wy 1.0 0.25 0xffe070 0.8)))))
 
 (defn draw-arena! [^StringBuilder sb]
-  (let [sc @scr st @S t (:time st)]
+  (let [sc @scr st @S t (:time st) t3? @t3/on?]
+    ;; the 3D table re-renders its board when the tilt moves
+    (when t3? (let [[tx ty] (:tilt st)] (t3/frame! sc tx ty)))
     ;; balls: trail then core
-    (doseq [b (:balls st)]
+    (doseq [b (if t3? nil (:balls st))]
       (let [c (get mat-color (:mat b) 0xffd27a)
             tr (:trail b) n (count tr)
             rb? (pos? (:rainbow b 0.0))]
@@ -1672,6 +1683,15 @@
                    (gfx/glow! sc (+ (:x b) (* 0.9 (math/cos a))) (+ (:y b) (* 0.9 (math/sin a)))
                               0.8 0.12 0xffffff (if (even? (int (* 20.0 t))) 1.0 0.5)))
           (gfx/ball! sc (:x b) (:y b) 3.4 BR c 1.0))))
+    ;; 3D table: marbles are spheres with shadows, the trail rides at their height
+    (when t3?
+      (doseq [b (:balls st)]
+        (let [c (get mat-color (:mat b) 0xffd27a) tr (:trail b) n (count tr)]
+          (aset (:xf sc) 15 BR)
+          (dotimes [j (dec n)]
+            (let [[x y] (nth tr j) f (/ (inc j) (* 1.0 n))]
+              (gfx/glow! sc x y 1.2 0.3 c (* 0.16 f))))
+          (t3/marble! sc (:x b) (:y b) BR c 2.4))))
     ;; lodestone shimmer
     (doseq [[x y] (:lodes st)]
       (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
@@ -1956,6 +1976,7 @@
       (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
                         (gfx/set-angle! @scr (:theta st))
                         (gfx/rebuild-cache! @scr w/sample)
+                        (when (view3d?) (t3/enable! @scr (lv :hmap)))
                         (clear-screen!)
                         (when (= mode :card) (swap! S assoc :card-fresh true)))
       (= mode :card) (when (and (contains? #{:space :enter :click} k) (= ev :press))
@@ -2322,6 +2343,7 @@
           (fn [tx ty]
             (let [x0 (* 2.0 tx) y0 (* 2.0 ty) sc @scr]
               (gfx/cache-rect! sc w/sample x0 y0 (+ x0 2.0) (+ y0 2.0))
+              (when @t3/on? (t3/touch!))
               (gfx/mark-world-rect! sc x0 y0 (+ x0 1.999) (+ y0 1.999))))))
 
 (defn main! [o]
@@ -2344,6 +2366,13 @@
                       (reset! on-custom-exit #(reset! quit? true))
                       (swap! S assoc :score 0 :lives 5)
                       (enter-level! CUSTOM-LI))
+      (:special o) (let [l (:special o)]                      ; --level 4.3: a special level
+                     (reset! custom-level l)
+                     (swap! S assoc :score 0 :lives 5)
+                     (if (:skip-card o)
+                       (enter-level! CUSTOM-LI)
+                       (show-card! (str (:chapter l) "  ·  " (:name l)) (:card l)
+                                   (:accent (get L/themes (:theme l))) [:level CUSTOM-LI])))
       (:level o) (do (swap! S assoc :score 0 :lives 5)
                      (if (:skip-card o) (enter-level! (:level o)) (begin-level! (:level o))))
       :else (to-title!))
