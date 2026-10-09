@@ -47,6 +47,16 @@ They are not pushed and have no upstream PR.
 - **Observation, not fixed:** typeinfer takes about 18 minutes to reach a fixpoint on one large
   fn (`tesserae.gfx/compose!`). Everything else in gfx and world lowers in about 15 s. Turning
   off inlining didn't help. Worth a repro for the typeinfer census work (#1040/#1048).
+  - **Second data point (2026-10-09, about 15:03):** after the glyph-sprite work added roughly
+    30 lines and a few more locals to `compose!`, the same lowering ran past 60 minutes,
+    pinning one core (`lg-aot-host` at about 130% CPU). That's at least 3× slower for a
+    modest size increase, which points to superlinear typeinfer cost in function size or
+    local count.
+  - Repro inputs: `tesserae/gfx.lg` at commits `2126d67` (≈18 min) and `7cc3cd9` (>60 min),
+    driven by `tools/build-aot.sh` / `tools/aot-lower.lg` in mparrett/tesserae (private).
+    Next step: time typeinfer alone on each `compose!` version and bisect which construct
+    (the loop-carried int-slot array, nested `let`s in the inner loop, the `px` closure)
+    drives the fixpoint iterations.
 - **Observation:** the lowerer guesses `:int` for params used in arithmetic, so float params
   need `^double` hints. Without them, `sample`'s params became int64.
 - Inside lowered code, `.append` on a StringBuilder goes through reflection on every call, and
