@@ -1292,7 +1292,7 @@
 (defn handle-event! [[k ev]]
   (let [st @S mode (:mode st) title? (neg? (:li st))]
     (cond
-      (= k :ctrl-c) (reset! quit? true)
+      (= k :ctrl-c) (when-not *in-wasm* (reset! quit? true))   ; a browser tab can't quit
       (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
                         (gfx/set-angle! @scr (:theta st))
                         (gfx/rebuild-cache! @scr w/sample)
@@ -1302,7 +1302,7 @@
                        (if (< (* 70 (:mode-t st)) 400)
                          (swap! S assoc :mode-t 99.0)
                          (card-done!)))
-      title? (cond (contains? #{:q :esc} k) (reset! quit? true)
+      title? (cond (contains? #{:q :esc} k) (when-not *in-wasm* (reset! quit? true))
                    (contains? #{:space :enter :click} k) (new-game! 0)
                    (and (keyword? k) (= 1 (count (name k))))
                    (let [j (str/index-of level-keys (name k))]

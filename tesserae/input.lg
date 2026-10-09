@@ -71,12 +71,26 @@
                       (when-let [k (code->key c)] [k :press]))
     :else nil))
 
+(def last-size (atom nil))   ; browser only: xterm.js resizes send no BEL
+(def last-size-check (atom 0))
+
+(defn- wasm-resize-events
+  "In the browser the shell refits xterm.js on window resize but the VM gets no
+   signal, so poll term/size twice a second and synthesize a :resize."
+  [t]
+  (if (and *in-wasm* (> (- t @last-size-check) 500))
+    (let [sz (term/size) prev @last-size]
+      (reset! last-size-check t)
+      (reset! last-size sz)
+      (if (and prev (not= sz prev)) [[:resize :press]] []))
+    []))
+
 (defn poll!
   "Drain pending input. Returns a vector of discrete events [key event] and
    updates the held-key model and mouse position."
   []
   (let [t (now-ms)]
-    (loop [evs []]
+    (loop [evs (wasm-resize-events t)]
       (if (term/key-pending?)
         (let [raw (term/read-key)
               p (parse raw)]
