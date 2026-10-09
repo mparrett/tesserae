@@ -210,3 +210,22 @@ one conflict, in the ball draw call, and both sides were kept.
   1.2 126 s, 2.1 89 s, 2.2 112 s, 4.x 38 s, 5.1 136 s, 6.1 39 s, 6.2 139 s). 3.1, 3.2 and 3.3
   end short (14, 5 and 1 left); Blueprint varies a lot run to run with a bot that can't aim at
   thin line art.
+
+## 2026-10-09: v2 level editor (editor agent)
+
+- `./play.sh --edit [file]` opens a 24×24 editor drawn by the game's own renderer. `?` and `,`
+  show packed: `load-map!` re-packs the whole field on each edit (about 16 ms), while the EDN
+  keeps the raw chars. All arena cells are marked dirty rather than invalidated, so `compose!`
+  still diffs.
+- Brushes come from the levels.lg legend (boss chars left out). There's flood fill,
+  rectangles, mirror painting, a pen, 30-step undo, and theme, goal, flag, speed and par
+  settings. `P` play-tests in the same process, and Q returns to the editor.
+- `--map file.edn` plays a custom map. game.lg gained a small custom section (`CUSTOM-LI`,
+  `level-at`, `on-custom-exit`) and guards so custom runs never write progress or medals.
+- **surprise:** the editor pushes kitty flags 1 (not 11) so `?` arrives as text rather than
+  shift+`/`; play-test switches back to the game's flags. `edn/read-string` resolves but is
+  nil (related to the open let-go #992 work).
+- **surprise:** piping play.sh's stdout (e.g. through `tee`) makes `term/size` nil, which falls
+  back to a 100×30 layout.
+- Two example maps ship in `levels/custom/`, both made with the editor through tmux
+  send-keys. Tests: 196 assertions.
