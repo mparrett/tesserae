@@ -92,7 +92,9 @@
      :wcache (int-array npx)      ; posterized static colour per *world* pixel
      :sgr-cache (volatile! {})
      :full (atom true)
-     :coarse (atom false)         ; one sample per 2x2 px block (rotation transitions)
+     :coarse (atom false)
+     :cup-row (mapv (fn [cy] (str ESC "[" (+ oy cy) ";")) (range rows))
+     :cup-col (mapv (fn [cx] (str (+ ox cx) "H")) (range cols))         ; one sample per 2x2 px block (rotation transitions)
      :stats (int-array 4)}))      ; [cells-emitted bytes dirty-cells -]
 
 (defn too-small? [scr] (< (:tc scr) (+ 48 2 20)))
@@ -310,51 +312,53 @@
                  (do (aset ar i 0.0) (aset ag i 0.0) (aset ab i 0.0)
                      (post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))))))
         coarse? @(:coarse scr)
-        prev-top (volatile! 0)
-        fg (volatile! -1) bg (volatile! -1)
-        last-i (volatile! -100)
-        emitted (volatile! 0) dirty (volatile! 0)]
+        ;; loop state in int slots (lowers to native aget/aset under AOT):
+        ;; 0 prev-top  1 fg  2 bg  3 last-i  4 emitted  5 dirty
+        v (int-array 6)
+        cup-row (:cup-row scr) cup-col (:cup-col scr)]
+    (aset v 1 -1) (aset v 2 -1) (aset v 3 -100)
     (when full?
       (dotimes [i (alength ptop)] (aset ptop i -1) (aset pglyph i 0)))
     (loop [cy 0]
       (when (< cy rows)
-        (when (or full? (== 1 (aget rmark cy)) (== 1 (aget prmark cy)))
+        (when (or full? (= 1 (aget rmark cy)) (= 1 (aget prmark cy)))
           (let [base-i (* cy cols) y0 (* 2 cy) y1 (inc y0)]
             (loop [cx 0]
               (when (< cx cols)
                 (let [i (+ cx base-i)]
-                  (when (or full? (== 1 (aget mark i)) (== 1 (aget pmark i)))
-                    (vswap! dirty inc)
+                  (when (or full? (= 1 (aget mark i)) (= 1 (aget pmark i)))
+                    (aset v 5 (inc (aget v 5)))
                     (let [top (if coarse?
-                                (if (odd? cx) @prev-top (vreset! prev-top (px cx y0)))
+                                (if (= 1 (bit-and cx 1))
+                                  (aget v 0)
+                                  (let [t (px cx y0)] (aset v 0 t) t))
                                 (px cx y0))
                           bot (if coarse? top (px cx y1))
                           tg (aget tglyph i)
                           gl (if tg (int (first tg)) 0x2580)]
                       (aset ovr (+ cx (* y0 S)) -1)
                       (aset ovr (+ cx (* y1 S)) -1)
-                      (when (or (not= top (aget ptop i)) (not= bot (aget pbot i))
-                                (not= gl (aget pglyph i)))
+                      (when (not (and (= top (aget ptop i)) (= bot (aget pbot i))
+                                      (= gl (aget pglyph i))))
                         (aset ptop i top) (aset pbot i bot) (aset pglyph i gl)
-                        (vswap! emitted inc)
-                        (when (or (zero? cx) (not= i (inc @last-i)))
-                          (.append sb ESC) (.append sb "[")
-                          (.append sb (+ oy cy)) (.append sb ";")
-                          (.append sb (+ ox cx)) (.append sb "H"))
-                        (vreset! last-i i)
+                        (aset v 4 (inc (aget v 4)))
+                        (when (or (= 0 cx) (not (= i (inc (aget v 3)))))
+                          (.append sb (nth cup-row cy))
+                          (.append sb (nth cup-col cx)))
+                        (aset v 3 i)
                         (if tg
                           (let [tc (aget tcol i)
                                 avg (rgb (quot (+ (cr top) (cr bot)) 2)
                                          (quot (+ (cg top) (cg bot)) 2)
                                          (quot (+ (cb top) (cb bot)) 2))]
-                            (when (not= tc @fg) (.append sb (sgr-str cache tc false)) (vreset! fg tc))
-                            (when (not= avg @bg) (.append sb (sgr-str cache avg true)) (vreset! bg avg))
+                            (when (not (= tc (aget v 1))) (.append sb (sgr-str cache tc false)) (aset v 1 tc))
+                            (when (not (= avg (aget v 2))) (.append sb (sgr-str cache avg true)) (aset v 2 avg))
                             (.append sb tg))
-                          (if (== top bot)
-                            (do (when (not= bot @bg) (.append sb (sgr-str cache bot true)) (vreset! bg bot))
+                          (if (= top bot)
+                            (do (when (not (= bot (aget v 2))) (.append sb (sgr-str cache bot true)) (aset v 2 bot))
                                 (.append sb " "))
-                            (do (when (not= top @fg) (.append sb (sgr-str cache top false)) (vreset! fg top))
-                                (when (not= bot @bg) (.append sb (sgr-str cache bot true)) (vreset! bg bot))
+                            (do (when (not (= top (aget v 1))) (.append sb (sgr-str cache top false)) (aset v 1 top))
+                                (when (not (= bot (aget v 2))) (.append sb (sgr-str cache bot true)) (aset v 2 bot))
                                 (.append sb HALF)))))
                       (aset tglyph i nil)))
                   (aset pmark i (aget mark i))
@@ -364,9 +368,9 @@
         (aset rmark cy 0)
         (recur (inc cy))))
     (reset! (:full scr) false)
-    (aset stats 0 @emitted)
+    (aset stats 0 (aget v 4))
     (aset stats 1 (- (.length sb) start-len))
-    (aset stats 2 @dirty)
+    (aset stats 2 (aget v 5))
     nil))
 
 ;; ---------------------------------------------------------------------------
