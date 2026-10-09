@@ -14,6 +14,7 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ./play.sh                       # title screen; SPACE to begin, 1-0 to jump to a level
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
+./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
 LG=/path/to/lg ./play.sh        # use another let-go binary
 ```
 
@@ -58,7 +59,11 @@ Per frame (`tesserae/gfx.lg`):
    tiles that change are re-sampled.
 2. Balls, trails, particles and lodestone halos add light to a screen-space accumulation
    buffer and mark their cells dirty. The trowel writes a solid overlay with horizontal
-   anti-aliasing.
+   anti-aliasing. Ball cores are sub-cell *glyph sprites*: the disc's coverage of the cell's
+   2×2 quadrant or 2×3 sextant subcells is thresholded, and the mask is the glyph index
+   (fg = ball light, bg = the cell's darker pixel). Sextants (U+1FB00) need a font or
+   terminal that draws them (Ghostty, kitty, WezTerm, foot); `--glyphs off` is the plain
+   light-buffer ball.
 3. `compose!` walks dirty rows and cells only, adds light, posterizes to 6 bits per channel
    before diffing, and compares against what the terminal already shows. It emits changed
    cells with SGR state tracking, contiguous-run cursor elision and cached SGR strings, all
