@@ -219,6 +219,35 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
 - Ctrl-C and Q on the title screen don't quit, because a tab has nothing to quit to.
   Resizing the window refits the grid, and the game re-lays out within half a second.
 
+## The 3D tilt table (this branch)
+
+This branch (`spike/table3d`) adds a 3D view of the tilt-labyrinth table: a perspective camera
+over a tilting board, extruded walls, lighting that shifts with the tilt, and a marble with a
+cast shadow. Physics is unchanged.
+
+```sh
+git checkout spike/table3d
+./play.sh --level 4.3 --3d      # High Table, the showcase (a special level, not on the title list)
+./play.sh --3d                  # every tilt level in 3D, including 4.1, 4.2 and the Orrery
+TESS_STORAGE_ID=spike3d ./play.sh --3d   # keep spike runs out of your saved progress
+```
+
+← ↑ → ↓ tilt the table (it stays where you leave it), SPACE levels it. Motion frames render
+coarse and sharpen once the tilt holds. A terminal of 124×50 or more doubles the raster; the
+marble reads much better at 3–4× (around 220×80).
+
+To build an AOT binary for the spike, follow "AOT build (optional)" below and add the 3D
+namespace to the list:
+
+```sh
+TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot-3d \
+  AOT_SKIP=compose! ./tools/build-aot.sh tesserae.gfx tesserae.world tesserae.table3d
+LG=../lg-tesserae-aot-3d ./play.sh --level 4.3 --3d --stats
+```
+
+On the AOT binary the board renders about 2.5× faster; `compose!` (still on the VM) becomes
+the limit while tilting.
+
 ## AOT build (optional)
 
 let-go can lower namespaces to native Go and bake them into a custom `lg`
