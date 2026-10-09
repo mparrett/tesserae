@@ -1,0 +1,245 @@
+(ns tesserae.world
+  "The tile field: a 24x24 grid of tiles, each 2x2 world units. Flat int arrays
+   (no allocation on the hot path), a seeded tetromino packer, and the static
+   pixel sampler the raster engine calls through the field rotation."
+  (:require [tesserae.gfx :as gfx] [clojure.string]))
+
+(def G 24)
+(def N (* G G))
+
+;; tile types
+(def EMPTY 0) (def NORM 1) (def HARD 2) (def WALL 3) (def GHOST 4) (def MITO 5)
+(def RUBBER 6) (def LEAD 7) (def MAGNET 8) (def PIT 9) (def LAMP 10) (def WARD 11)
+(def SETT 12)
+
+(def tt (int-array N))      ; type
+(def thits (int-array N))   ; hits left
+(def tpiece (int-array N))  ; piece id (tetromino set), 0 = none
+(def tbase (int-array N))   ; colours
+(def thl (int-array N))
+(def tsh (int-array N))
+(def tdot (int-array N))
+(def tkind (int-array N))   ; tetromino letter (char code) for ghosts / sets
+(def bgc (int-array N))     ; background per tile
+
+(def outside (atom 0x07070c))
+(def on-change (atom (fn [tx ty] nil)))
+
+(def breakable? #{NORM HARD MITO RUBBER LEAD MAGNET LAMP})
+
+;; ---------------------------------------------------------------------------
+;; seeded rng (xorshift32) so a level's tetromino packing is stable
+
+(def ^:private rs (atom 2463534242))
+(defn seed! [s] (reset! rs (bit-or (bit-and (* 2654435761 (inc s)) 0xffffffff) 1)))
+(defn rnd-int [n]
+  (let [x @rs
+        x (bit-and (bit-xor x (bit-shift-left x 13)) 0xffffffff)
+        x (bit-xor x (bit-shift-right x 17))
+        x (bit-and (bit-xor x (bit-shift-left x 5)) 0xffffffff)]
+    (reset! rs x)
+    (mod x n)))
+
+;; ---------------------------------------------------------------------------
+;; tetrominoes
+
+(def piece-colors
+  {\I 0x3fd0e0 \O 0xf2d14b \T 0xb05ce0 \S 0x5ad35a
+   \Z 0xe8534a \J 0x4a6ef0 \L 0xf09a3a})
+
+(def ^:private base-shapes
+  {\I [[0 0] [1 0] [2 0] [3 0]]
+   \O [[0 0] [1 0] [0 1] [1 1]]
+   \T [[0 0] [1 0] [2 0] [1 1]]
+   \S [[1 0] [2 0] [0 1] [1 1]]
+   \Z [[0 0] [1 0] [1 1] [2 1]]
+   \J [[0 0] [0 1] [1 1] [2 1]]
+   \L [[2 0] [0 1] [1 1] [2 1]]})
+
+(defn- normalize [cells]
+  ;; anchor on the first cell in row-major order, so placement fills the
+  ;; first empty cell of a scan
+  (let [sorted (sort-by (fn [[x y]] (+ (* y 100) x)) cells)
+        [ax ay] (first sorted)]
+    (vec (map (fn [[x y]] [(- x ax) (- y ay)]) sorted))))
+
+(def orientations
+  (vec (for [[letter cells] base-shapes
+             o (distinct (take 4 (iterate (fn [cs] (normalize (map (fn [[x y]] [(- y) x]) cs)))
+                                          (normalize cells))))]
+         [letter o])))
+
+;; ---------------------------------------------------------------------------
+;; colour derivation
+
+(defn- shades! [i base]
+  (aset tbase i base)
+  (aset tdot i base)
+  (aset thl i (gfx/mix base 0xffffff 0.38))
+  (aset tsh i (gfx/scale base 0.55)))
+
+(defn changed! [i] (@on-change (mod i G) (quot i G)))
+
+(defn put! [i t base]
+  (aset tt i t)
+  (shades! i base)
+  (aset thits i (case t 2 2 8 3 1))
+  (case t
+    5 (aset tdot i 0x0c3020)                         ; mitosis: nucleus
+    6 (aset tdot i 0xffffff)                         ; rubber: highlight
+    7 (aset tdot i 0x22262e)                         ; lead: dark slug
+    8 (do (aset tdot i 0xe8e8f0) (aset thl i 0xff6a80)) ; magnet: silver pole
+    10 (do (aset tdot i 0xfff6c8) (aset thl i 0xffe9a0)) ; lamp
+    3 (do (aset thl i 0x707884) (aset tsh i 0x2a2e36))
+    nil)
+  (changed! i))
+
+(defn clear! [i]
+  (aset tt i EMPTY) (aset tpiece i 0)
+  (changed! i))
+
+(defn set-ghost! [i]
+  ;; ghost -> set tile, keeps its tetromino colour plus a gold rim
+  (let [base (get piece-colors (char (aget tkind i)) 0xc0c0c0)]
+    (aset tt i SETT)
+    (shades! i base)
+    (aset thl i (gfx/mix base 0xffe08a 0.65))
+    (aset thits i 1)
+    (changed! i)))
+
+(defn unset! [i]
+  (aset tt i GHOST)
+  (shades! i (get piece-colors (char (aget tkind i)) 0xc0c0c0))
+  (changed! i))
+
+(defn crack! [i]
+  (aset thits i (dec (aget thits i)))
+  (let [b (gfx/scale (aget tbase i) 0.7)]
+    (aset tbase i b)
+    (when (not= (aget tt i) MAGNET) (aset tdot i (gfx/scale b 0.8)))
+    (aset thl i (gfx/scale (aget thl i) 0.75)))
+  (changed! i))
+
+;; ---------------------------------------------------------------------------
+;; pixel sampler
+
+(defn sample
+  "Static colour at world point (wx, wy)."
+  [wx wy]
+  (if (or (< wx 0.0) (>= wx 48.0) (< wy 0.0) (>= wy 48.0))
+    @outside
+    (let [hx (* wx 0.5) hy (* wy 0.5)
+          tx (int hx) ty (int hy)
+          i (+ tx (* ty G))
+          t (aget tt i)
+          u (- hx tx) v (- hy ty)]
+      (if (== t 0)
+        (let [b (aget bgc i)]
+          ;; pegboard dot at each tile's corner
+          (if (and (< u 0.26) (< v 0.26)) (gfx/add b 0x0d0d12) b))
+        (case t
+          4 (let [b (aget bgc i)
+                  ring (or (< u 0.3) (< v 0.3) (> u 0.7) (> v 0.7))]
+              (gfx/mix b (aget tbase i) (if ring 0.42 0.12)))
+          9 (let [du (- u 0.5) dv (- v 0.5) d (+ (* du du) (* dv dv))]
+              (if (< d 0.12) 0x000000 (if (< d 0.2) 0x14141a 0x24242c)))
+          (let [s (+ u v)]
+            (cond (< s 0.6) (aget thl i)
+                  (> s 1.4) (aget tsh i)
+                  (and (> u 0.2) (< u 0.8) (> v 0.2) (< v 0.8)) (aget tdot i)
+                  :else (aget tbase i))))))))
+
+;; ---------------------------------------------------------------------------
+;; queries
+
+(defn tile-at [tx ty]
+  (if (and (>= tx 0) (< tx G) (>= ty 0) (< ty G)) (aget tt (+ tx (* ty G))) -1))
+
+(defn solid-type? [t] (and (not= t 0) (not= t PIT) (>= t 0)))
+
+(defn count-where [pred]
+  (loop [i 0 n 0] (if (< i N) (recur (inc i) (if (pred (aget tt i)) (inc n) n)) n)))
+
+(defn indices-where [pred]
+  (loop [i 0 acc []] (if (< i N) (recur (inc i) (if (pred (aget tt i)) (conj acc i) acc)) acc)))
+
+(defn piece-left
+  "Tiles still standing in piece p of the given type set."
+  [p types]
+  (if (zero? p) -1
+      (loop [i 0 n 0]
+        (if (< i N)
+          (recur (inc i) (if (and (== (aget tpiece i) p) (contains? types (aget tt i))) (inc n) n))
+          n))))
+
+(defn tile-center [i] [(+ 1.0 (* 2.0 (mod i G))) (+ 1.0 (* 2.0 (quot i G)))])
+
+;; ---------------------------------------------------------------------------
+;; level maps
+
+(def ^:private simple-legend
+  {\H [HARD 0x8a94a8] \# [WALL 0x50565f] \+ [MITO 0x7cf2b0] \* [RUBBER 0xff4fa0]
+   \% [LEAD 0x7d8597] \@ [MAGNET 0xd03050] \x [PIT 0x101014] \$ [LAMP 0xc8962e]})
+
+(defn- pack-tetrominoes!
+  "Fill every cell of grid g (a vector of row strings, mutable copy as
+   char-array per row) marked `region` with seeded tetrominoes; leftovers
+   become monominoes. Returns a map cell -> [letter piece-id]."
+  [rows region start-id]
+  (let [cells (atom {})
+        free? (fn [x y] (and (>= x 0) (< x G) (>= y 0) (< y G)
+                             (= region (nth (nth rows y) x))
+                             (not (contains? @cells [x y]))))
+        id (atom start-id)]
+    (doseq [y (range G) x (range G)]
+      (when (free? x y)
+        (let [n (count orientations)
+              off (rnd-int n)
+              fit (loop [j 0]
+                    (when (< j n)
+                      (let [[letter o] (nth orientations (mod (+ off j) n))]
+                        (if (every? (fn [[dx dy]] (free? (+ x dx) (+ y dy))) o)
+                          [letter o]
+                          (recur (inc j))))))]
+          (swap! id inc)
+          (if fit
+            (let [[letter o] fit]
+              (doseq [[dx dy] o] (swap! cells assoc [(+ x dx) (+ y dy)] [letter @id])))
+            (swap! cells assoc [x y] [(nth "IOTSZJL" (rnd-int 7)) @id])))))
+    [@cells @id]))
+
+(defn load-map!
+  "Load a level: rows = 24 strings of 24 chars, theme = {:bg0 :bg1 :outside}.
+   Returns {:starts [[wx wy]...]}."
+  [rows theme seed]
+  (assert (= G (count rows)) (str "map needs 24 rows, got " (count rows)))
+  (doseq [[y r] (map-indexed vector rows)]
+    (assert (= G (count r)) (str "row " y " is " (count r) " chars: " r)))
+  (seed! seed)
+  (reset! outside (get theme :outside 0x07070c))
+  (let [bg0 (:bg0 theme) bg1 (:bg1 theme)
+        [fill-n id1] (pack-tetrominoes! rows \? 0)
+        [fill-g _] (pack-tetrominoes! rows \, id1)
+        starts (atom [])]
+    (dotimes [y G]
+      (dotimes [x G]
+        (let [i (+ x (* y G))
+              ch (nth (nth rows y) x)
+              b (gfx/mix bg0 bg1 (/ y 23.0))
+              b (if (even? (+ x y)) b (gfx/scale b 1.12))]
+          (aset bgc i b)
+          (aset tt i EMPTY) (aset tpiece i 0) (aset tkind i 0)
+          (cond
+            (= ch \?) (let [[letter p] (get fill-n [x y])]
+                        (put! i NORM (piece-colors letter)) (aset tpiece i p))
+            (= ch \,) (let [[letter p] (get fill-g [x y])]
+                        (put! i GHOST (piece-colors letter)) (aset tpiece i p)
+                        (aset tkind i (int letter)))
+            (contains? piece-colors ch) (put! i NORM (piece-colors ch))
+            (contains? piece-colors (first (clojure.string/upper-case (str ch))))
+            (let [letter (first (clojure.string/upper-case (str ch)))]
+              (put! i GHOST (piece-colors letter)) (aset tkind i (int letter)))
+            (contains? simple-legend ch) (let [[t c] (simple-legend ch)] (put! i t c))
+            (= ch \B) (swap! starts conj [(+ 1.0 (* 2 x)) (+ 1.0 (* 2 y))])
+            :else nil))))
+    {:starts @starts}))

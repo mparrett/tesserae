@@ -1,0 +1,343 @@
+(ns tesserae.gfx
+  "The raster engine. Everything on the arena is a square *pixel*: one terminal
+   cell is two pixels stacked (▀, fg = top, bg = bottom), so the arena is a
+   true square that can turn through any angle.
+
+   Coordinates:
+     world units  0..48 on both axes (a tile is 2x2 units, the grid is 24x24)
+     screen px    0..S-1, S = 48*k, k = integer zoom picked from terminal size
+   The world is drawn through a rotation about its centre, so turning the
+   field is a sampling change, not a redraw of game objects.
+
+   Per frame:
+     1. sprites add light into acc-r/g/b (screen px) and mark their cells
+     2. solid overlays (paddle) write ovr (screen px) and mark cells
+     3. compose! walks dirty rows/cells, samples the static layer through the
+        inverse rotation, adds light, posterizes, diffs against what the
+        terminal already shows, and emits only changed cells with SGR state
+        tracking and short-gap bridging."
+  (:require [term]))
+
+(def ESC (str (char 27)))
+(def HALF "▀")
+
+;; ---------------------------------------------------------------------------
+;; colour helpers (packed 0xRRGGBB ints)
+
+(defn rgb [r g b]
+  (bit-or (bit-or (bit-shift-left (int r) 16) (bit-shift-left (int g) 8)) (int b)))
+(defn cr [c] (bit-and (bit-shift-right c 16) 255))
+(defn cg [c] (bit-and (bit-shift-right c 8) 255))
+(defn cb [c] (bit-and c 255))
+
+(defn clamp8 [x] (if (> x 255) 255 (if (< x 0) 0 (int x))))
+
+(defn scale [c f]
+  (rgb (clamp8 (* (cr c) f)) (clamp8 (* (cg c) f)) (clamp8 (* (cb c) f))))
+
+(defn mix [a b t]
+  (let [s (- 1.0 t)]
+    (rgb (clamp8 (+ (* s (cr a)) (* t (cr b))))
+         (clamp8 (+ (* s (cg a)) (* t (cg b))))
+         (clamp8 (+ (* s (cb a)) (* t (cb b)))))))
+
+(defn add [a b]
+  (rgb (clamp8 (+ (cr a) (cr b))) (clamp8 (+ (cg a) (cg b))) (clamp8 (+ (cb a) (cb b)))))
+
+;; Posterize LUT, 6 bits/channel, endpoint preserving (shapescii ADR-021: quantize
+;; *before* the diff so faint glow edges stop dirtying cells).
+(def ^:private PLEVELS 63)
+(def post-lut
+  (let [a (int-array 256)]
+    (dotimes [c 256]
+      (let [inner (quot (+ (* c PLEVELS) 127) 255)]
+        (aset a c (quot (+ (* inner 255) (quot PLEVELS 2)) PLEVELS))))
+    a))
+
+(defn post [r g b]
+  (rgb (aget post-lut (clamp8 r)) (aget post-lut (clamp8 g)) (aget post-lut (clamp8 b))))
+
+;; ---------------------------------------------------------------------------
+;; screen
+
+(def WORLD 48.0)
+(def HALFW 24.0)
+
+(defn make-screen
+  "Layout for a terminal of tc x tr cells with a side panel of panel-w cols."
+  [tc tr panel-w]
+  (let [k (loop [k 4] (cond (zero? k) 0
+                            (and (<= (+ (* 48 k) panel-w 2) tc) (<= (* 24 k) tr)) k
+                            :else (recur (dec k))))
+        k (max k 1)
+        S (* 48 k)
+        cols S
+        rows (quot S 2)
+        framed? (<= (+ rows 2) tr)
+        ox (max 2 (+ 1 (quot (- tc panel-w cols) 2)))
+        oy (if framed? (+ 2 (quot (- tr rows 2) 2)) 1)
+        npx (* S S)
+        ncell (* cols rows)
+        ovr (int-array npx)]
+    (dotimes [i npx] (aset ovr i -1))
+    {:k k :S S :cols cols :rows rows :ox ox :oy oy :framed? framed?
+     :tc tc :tr tr :panel-x (+ ox cols 3)
+     :acc-r (double-array npx) :acc-g (double-array npx) :acc-b (double-array npx)
+     :ovr ovr
+     :mark (int-array ncell) :pmark (int-array ncell)
+     :rmark (int-array rows) :prmark (int-array rows)
+     :ptop (int-array ncell) :pbot (int-array ncell) :pglyph (int-array ncell)
+     :tglyph (object-array ncell) :tcol (int-array ncell)
+     :xf (double-array 2)         ; [cos sin] of the field angle
+     :full (atom true)
+     :stats (int-array 4)}))      ; [cells-emitted bytes dirty-cells -]
+
+(defn too-small? [scr] (< (:tc scr) (+ 48 2 20)))
+
+(defn set-angle! [scr theta]
+  (let [xf (:xf scr)]
+    (aset xf 0 (math/cos theta))
+    (aset xf 1 (math/sin theta))))
+
+(defn invalidate! [scr] (reset! (:full scr) true))
+
+;; world -> screen units (unscaled), and back. Rotation about (24,24).
+(defn w->s [scr wx wy]
+  (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
+        dx (- wx HALFW) dy (- wy HALFW)]
+    [(+ HALFW (- (* c dx) (* s dy))) (+ HALFW (+ (* s dx) (* c dy)))]))
+
+(defn s->w [scr sx sy]
+  (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
+        dx (- sx HALFW) dy (- sy HALFW)]
+    [(+ HALFW (+ (* c dx) (* s dy))) (+ HALFW (- (* c dy) (* s dx)))]))
+
+(defn rot-vec
+  "Rotate a vector world->screen (sign 1) or screen->world (sign -1)."
+  [scr vx vy sign]
+  (let [xf (:xf scr) c (aget xf 0) s (* sign (aget xf 1))]
+    [(- (* c vx) (* s vy)) (+ (* s vx) (* c vy))]))
+
+(defn mark-cell! [scr cx cy]
+  (let [cols (:cols scr)]
+    (when (and (>= cx 0) (< cx cols) (>= cy 0) (< cy (:rows scr)))
+      (aset (:mark scr) (+ cx (* cy cols)) 1)
+      (aset (:rmark scr) cy 1))))
+
+(defn mark-world-rect!
+  "Mark every cell covering the world-space box [x0,x1]x[y0,y1] (rotation aware)."
+  [scr x0 y0 x1 y1]
+  (let [k (:k scr)
+        corners [(w->s scr x0 y0) (w->s scr x1 y0) (w->s scr x0 y1) (w->s scr x1 y1)]
+        xs (map first corners) ys (map second corners)
+        px0 (int (math/floor (* k (apply min xs)))) px1 (int (math/floor (* k (apply max xs))))
+        py0 (int (math/floor (* k (apply min ys)))) py1 (int (math/floor (* k (apply max ys))))]
+    (loop [cy (max 0 (quot (max 0 py0) 2))]
+      (when (and (<= cy (quot py1 2)) (< cy (:rows scr)))
+        (loop [cx (max 0 px0)]
+          (when (and (<= cx px1) (< cx (:cols scr)))
+            (mark-cell! scr cx cy)
+            (recur (inc cx))))
+        (recur (inc cy))))))
+
+;; ---------------------------------------------------------------------------
+;; sprites
+
+(defn glow!
+  "Additive light: a solid core of radius `core` and a 1/d^2 halo out to `rad`
+   (world units), colour c scaled by intensity. World-space position."
+  [scr wx wy rad core c inten]
+  (let [k (:k scr) S (:S scr) cols (:cols scr)
+        [sx sy] (w->s scr wx wy)
+        cx (* sx k) cy (* sy k)
+        rpx (* rad k)
+        x0 (max 0 (int (math/floor (- cx rpx)))) x1 (min (dec S) (int (math/floor (+ cx rpx))))
+        y0 (max 0 (int (math/floor (- cy rpx)))) y1 (min (dec S) (int (math/floor (+ cy rpx))))
+        rad2 (* rad rad) core2 (* core core)
+        r (* inten (cr c)) g (* inten (cg c)) b (* inten (cb c))
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr)
+        kinv (/ 1.0 k)]
+    (loop [y y0]
+      (when (<= y y1)
+        (let [dy (* (- (+ y 0.5) cy) kinv) dy2 (* dy dy) row (* y S) cyc (quot y 2)]
+          (loop [x x0]
+            (when (<= x x1)
+              (let [dx (* (- (+ x 0.5) cx) kinv) d2 (+ (* dx dx) dy2)]
+                (when (< d2 rad2)
+                  (let [f (if (< d2 core2) 1.0
+                              (* (/ core2 d2) (- 1.0 (/ d2 rad2))))
+                        i (+ x row)]
+                    (aset ar i (+ (aget ar i) (* r f)))
+                    (aset ag i (+ (aget ag i) (* g f)))
+                    (aset ab i (+ (aget ab i) (* b f)))
+                    (aset mark (+ x (* cyc cols)) 1)
+                    (aset rmark cyc 1))))
+              (recur (inc x)))))
+        (recur (inc y))))))
+
+(defn rect!
+  "Solid rectangle in *screen frame* units (not rotated), horizontally
+   anti-aliased so a paddle at a fractional x still moves smoothly."
+  [scr x0 y0 x1 y1 c]
+  (let [k (:k scr) S (:S scr) cols (:cols scr)
+        px0 (* x0 k) px1 (* x1 k)
+        ix0 (max 0 (int (math/floor px0))) ix1 (min (dec S) (int (math/floor px1)))
+        iy0 (max 0 (int (math/floor (* y0 k)))) iy1 (min (dec S) (dec (int (math/ceil (* y1 k)))))
+        ovr (:ovr scr) ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr)]
+    (loop [y iy0]
+      (when (<= y iy1)
+        (let [cyc (quot y 2)]
+          (loop [x ix0]
+            (when (<= x ix1)
+              (let [cov (- (min (+ x 1.0) px1) (max (* 1.0 x) px0))
+                    i (+ x (* y S))]
+                (if (>= cov 0.98)
+                  (aset ovr i c)
+                  (when (> cov 0.0)
+                    (aset ar i (+ (aget ar i) (* cov 0.9 (cr c))))
+                    (aset ag i (+ (aget ag i) (* cov 0.9 (cg c))))
+                    (aset ab i (+ (aget ab i) (* cov 0.9 (cb c))))))
+                (aset mark (+ x (* cyc cols)) 1)
+                (aset rmark cyc 1))
+              (recur (inc x)))))
+        (recur (inc y))))))
+
+(defn text!
+  "Overlay a string on arena cells starting at cell (cx,cy). Glyph bg is the
+   pixel colour beneath, so text floats over the field."
+  [scr cx cy s c]
+  (let [cols (:cols scr) n (count s)]
+    (when (and (>= cy 0) (< cy (:rows scr)))
+      (dotimes [j n]
+        (let [x (+ cx j)]
+          (when (and (>= x 0) (< x cols))
+            (let [i (+ x (* cy cols))]
+              (aset (:tglyph scr) i (subs s j (inc j)))
+              (aset (:tcol scr) i c)
+              (mark-cell! scr x cy))))))))
+
+(defn world-text!
+  "Centre text on a world position (follows the field's rotation)."
+  [scr wx wy s c]
+  (let [k (:k scr) [sx sy] (w->s scr wx wy)]
+    (text! scr (- (int (* sx k)) (quot (count s) 2)) (quot (int (* sy k)) 2) s c)))
+
+;; ---------------------------------------------------------------------------
+;; compose + emit
+
+(defn- sgr-fg [^StringBuilder sb c]
+  (.append sb ESC) (.append sb "[38;2;") (.append sb (cr c)) (.append sb ";")
+  (.append sb (cg c)) (.append sb ";") (.append sb (cb c)) (.append sb "m"))
+(defn- sgr-bg [^StringBuilder sb c]
+  (.append sb ESC) (.append sb "[48;2;") (.append sb (cr c)) (.append sb ";")
+  (.append sb (cg c)) (.append sb ";") (.append sb (cb c)) (.append sb "m"))
+
+(defn compose!
+  "Sample, diff and emit the arena into sb. static-fn: (wx wy) -> packed colour
+   of the static layer at a world point. Returns nil; fills (:stats scr)."
+  [scr static-fn ^StringBuilder sb]
+  (let [k (:k scr) S (:S scr) cols (:cols scr) rows (:rows scr)
+        ox (:ox scr) oy (:oy scr)
+        full? @(:full scr)
+        xf (:xf scr) c (aget xf 0) s (aget xf 1)
+        kinv (/ 1.0 k)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr) ovr (:ovr scr)
+        mark (:mark scr) pmark (:pmark scr) rmark (:rmark scr) prmark (:prmark scr)
+        ptop (:ptop scr) pbot (:pbot scr) pglyph (:pglyph scr)
+        tglyph (:tglyph scr) tcol (:tcol scr)
+        stats (:stats scr)
+        start-len (.length sb)
+        ;; one pixel: static sample through inverse rotation + light, posterized
+        px (fn [x y]
+             (let [i (+ x (* y S))
+                   X (- (* (+ x 0.5) kinv) HALFW) Y (- (* (+ y 0.5) kinv) HALFW)
+                   o (aget ovr i)
+                   base (if (>= o 0) o
+                            (static-fn (+ HALFW (+ (* c X) (* s Y)))
+                                       (+ HALFW (- (* c Y) (* s X)))))
+                   lr (aget ar i) lg (aget ag i) lb (aget ab i)]
+               (if (and (== lr 0.0) (== lg 0.0) (== lb 0.0))
+                 (post (cr base) (cg base) (cb base))
+                 (do (aset ar i 0.0) (aset ag i 0.0) (aset ab i 0.0)
+                     (post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))))))
+        fg (volatile! -1) bg (volatile! -1)
+        last-i (volatile! -100)
+        emitted (volatile! 0) dirty (volatile! 0)]
+    (aset stats 0 0)
+    (when full?
+      (dotimes [i (alength ptop)] (aset ptop i -1) (aset pglyph i 0)))
+    (loop [cy 0]
+      (when (< cy rows)
+        (when (or full? (== 1 (aget rmark cy)) (== 1 (aget prmark cy)))
+          (let [base-i (* cy cols)]
+            (loop [cx 0]
+              (when (< cx cols)
+                (let [i (+ cx base-i)]
+                  (when (or full? (== 1 (aget mark i)) (== 1 (aget pmark i)))
+                    (vswap! dirty inc)
+                    (let [y0 (* 2 cy)
+                          top (px cx y0)
+                          bot (px cx (inc y0))
+                          tg (aget tglyph i)
+                          gl (if tg (int (first tg)) 0x2580)]
+                      (aset ovr (+ cx (* y0 S)) -1)
+                      (aset ovr (+ cx (* (inc y0) S)) -1)
+                      (when (or (not= top (aget ptop i)) (not= bot (aget pbot i))
+                                (not= gl (aget pglyph i)))
+                        (aset ptop i top) (aset pbot i bot) (aset pglyph i gl)
+                        (vswap! emitted inc)
+                        ;; cursor: skip CUP when contiguous; bridge tiny gaps is
+                        ;; left out (clean cells would need their old colours)
+                        (when (or (zero? cx) (not= i (inc @last-i)))
+                          (.append sb ESC) (.append sb "[")
+                          (.append sb (+ oy cy)) (.append sb ";")
+                          (.append sb (+ ox cx)) (.append sb "H"))
+                        (vreset! last-i i)
+                        (if tg
+                          (let [tc (aget tcol i)
+                                avg (rgb (quot (+ (cr top) (cr bot)) 2)
+                                         (quot (+ (cg top) (cg bot)) 2)
+                                         (quot (+ (cb top) (cb bot)) 2))]
+                            (when (not= tc @fg) (sgr-fg sb tc) (vreset! fg tc))
+                            (when (not= avg @bg) (sgr-bg sb avg) (vreset! bg avg))
+                            (.append sb tg))
+                          (if (== top bot)
+                            (do (when (not= bot @bg) (sgr-bg sb bot) (vreset! bg bot))
+                                (.append sb " "))
+                            (do (when (not= top @fg) (sgr-fg sb top) (vreset! fg top))
+                                (when (not= bot @bg) (sgr-bg sb bot) (vreset! bg bot))
+                                (.append sb HALF)))))
+                      (aset tglyph i nil)))
+                  (aset pmark i (aget mark i))
+                  (aset mark i 0))
+                (recur (inc cx))))))
+        (aset prmark cy (aget rmark cy))
+        (aset rmark cy 0)
+        (recur (inc cy))))
+    (reset! (:full scr) false)
+    (aset stats 0 @emitted)
+    (aset stats 1 (- (.length sb) start-len))
+    (aset stats 2 @dirty)
+    nil))
+
+;; ---------------------------------------------------------------------------
+;; terminal helpers for non-arena UI (panel, cards)
+
+(defn at [^StringBuilder sb col row]
+  (.append sb ESC) (.append sb "[") (.append sb row) (.append sb ";")
+  (.append sb col) (.append sb "H"))
+
+(defn fg! [^StringBuilder sb c] (sgr-fg sb c))
+(defn bg! [^StringBuilder sb c] (sgr-bg sb c))
+(defn reset-sgr! [^StringBuilder sb] (.append sb ESC) (.append sb "[0m"))
+
+(def begin-sync (str ESC "[?2026h"))
+(def end-sync (str ESC "[?2026l"))
+
+(defn present!
+  "Write a built frame atomically (DEC 2026 synchronized output)."
+  [^StringBuilder sb]
+  (term/write (str begin-sync (.toString sb) end-sync))
+  (term/flush))

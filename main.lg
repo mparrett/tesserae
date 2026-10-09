@@ -1,0 +1,17 @@
+(ns main
+  (:require [tesserae.game :as game]))
+
+(defn parse-args [args]
+  (loop [as args o {}]
+    (if (empty? as) o
+        (let [[a b] as]
+          (case a
+            "--level" (recur (drop 2 as) (assoc o :level (dec (parse-long b))))
+            "--autoplay" (recur (rest as) (assoc o :autoplay true))
+            "--skip-card" (recur (rest as) (assoc o :skip-card true))
+            "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))
+            "--seconds" (recur (drop 2 as) (assoc o :seconds (parse-double b)))
+            "--stats" (recur (rest as) (assoc o :hud-stats true))
+            (recur (rest as) o))))))
+
+(game/main! (parse-args *command-line-args*))

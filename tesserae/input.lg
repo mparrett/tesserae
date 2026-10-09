@@ -1,0 +1,114 @@
+(ns tesserae.input
+  "Responsive input on a terminal that has no key-up events.
+
+   Three sources, best first:
+   1. kitty keyboard protocol (flags 1|2|8): real press/repeat/release, so a held
+      arrow is held exactly as long as the finger is down. Pushed on start,
+      popped on exit; terminals that don't speak it ignore the sequence.
+   2. fallback hold model: a fresh press holds the key for FRESH-MS (a short
+      nudge), an auto-repeat (same key again within REPEAT-WINDOW) extends it by
+      REPEAT-MS. Switches off for good the first time a kitty release arrives.
+   3. mouse any-motion (1003 + SGR 1006): absolute paddle x, click = action."
+  (:require [term] [clojure.string]))
+
+(def ESC (str (char 27)))
+
+(def FRESH-MS 150)
+(def REPEAT-MS 110)
+(def REPEAT-WINDOW 650)
+
+(def kitty? (atom false))
+(def held (atom {}))         ; key -> expiry ms, or :down (kitty)
+(def last-press (atom {}))   ; key -> ms
+(def mouse-x (atom nil))     ; last mouse column (1-based terminal col)
+(def mouse-moved (atom false))
+
+(def epoch (System/nanoTime))
+(defn now-ms [] (quot (- (System/nanoTime) epoch) 1000000))
+
+(defn start! []
+  (term/write (str ESC "[>11u"            ; kitty: disambiguate|events|all-keys
+                   ESC "[?1003h" ESC "[?1006h")))
+
+(defn stop! []
+  (term/write (str ESC "[<u" ESC "[?1003l" ESC "[?1006l")))
+
+(def ^:private csi-re #"^\x1b\[(\d*)(?:;(\d*)(?::(\d+))?)?([A-Za-z~u])$")
+
+(defn- code->key [n]
+  (case n
+    13 :enter 27 :esc 32 :space 9 :tab 127 :backspace 3 :ctrl-c
+    (if (and (> n 32) (< n 127)) (keyword (clojure.string/lower-case (str (char n)))) nil)))
+
+(defn parse
+  "Raw read-key token -> [key event] with event in #{:press :repeat :release}."
+  [s]
+  (cond
+    (map? s) [:mouse s]
+    (nil? s) nil
+    (= s "\u0007") [:resize :press]
+    (= s "\u0003") [:ctrl-c :press]
+    (= s ESC) [:esc :press]
+    (= s "\r") [:enter :press]
+    (= s "\n") [:enter :press]
+    (= s " ") [:space :press]
+    (= s "\t") [:tab :press]
+    (contains? #{(str ESC "OA") (str ESC "OB") (str ESC "OC") (str ESC "OD")} s)
+    [({"A" :up "B" :down "C" :right "D" :left} (subs s 2)) :press]
+    (clojure.string/starts-with? s (str ESC "["))
+    (let [m (re-find csi-re s)]
+      (when m
+        (let [[_ a _mods ev fin] m
+              event (case ev "2" :repeat "3" :release :press)
+              k (case fin
+                  "A" :up "B" :down "C" :right "D" :left
+                  "u" (code->key (if (= a "") 0 (parse-long a)))
+                  "~" nil
+                  nil)]
+          (when (or ev (= fin "u")) (reset! kitty? true))
+          (when k [k event]))))
+    (= 1 (count s)) (let [c (int (first s))]
+                      (when-let [k (code->key c)] [k :press]))
+    :else nil))
+
+(defn poll!
+  "Drain pending input. Returns a vector of discrete events [key event] and
+   updates the held-key model and mouse position."
+  []
+  (let [t (now-ms)]
+    (loop [evs []]
+      (if (term/key-pending?)
+        (let [raw (term/read-key)
+              p (parse raw)]
+          (cond
+            (nil? p) (recur evs)
+            (= :mouse (first p))
+            (let [m (second p)]
+              (reset! mouse-x (:x m)) (reset! mouse-moved true)
+              (recur (if (and (= :press (:action m)) (= :left (:button m)))
+                       (conj evs [:click :press]) evs)))
+            :else
+            (let [[k ev] p]
+              (if @kitty?
+                (swap! held (fn [h] (if (= ev :release) (dissoc h k) (assoc h k :down))))
+                (let [lp (get @last-press k -10000)
+                      rep? (< (- t lp) REPEAT-WINDOW)]
+                  (swap! last-press assoc k t)
+                  (swap! held assoc k (+ t (if rep? REPEAT-MS FRESH-MS)))))
+              (recur (if (= ev :release) evs (conj evs [k ev]))))))
+        evs))))
+
+(defn down?
+  "Is key k currently held?"
+  [k]
+  (let [v (get @held k)]
+    (cond (nil? v) false
+          (= v :down) true
+          :else (> v (now-ms)))))
+
+(defn axis
+  "-1/0/+1 from a pair of keys (any of the aliases)."
+  [neg-keys pos-keys]
+  (+ (if (some down? neg-keys) -1 0) (if (some down? pos-keys) 1 0)))
+
+(defn clear-held! [] (reset! held {}))

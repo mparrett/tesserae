@@ -1,0 +1,979 @@
+(ns tesserae.game
+  "Rules, physics and the frame loop.
+
+   Frames of reference: tiles and balls live in the *world* (which can turn);
+   the paddle, gravity and tilt live in the *screen* frame (where the player
+   stands). Collisions with the paddle are done by mapping the ball into the
+   screen frame and back, so the field can rotate under a moving ball."
+  (:require [term] [async]
+            [tesserae.gfx :as gfx]
+            [tesserae.world :as w]
+            [tesserae.input :as in]
+            [tesserae.levels :as L]
+            [clojure.string :as str]))
+
+;; ---------------------------------------------------------------------------
+;; constants
+
+(def DT (/ 1.0 240.0))     ; physics step
+(def BR 0.72)              ; ball radius (world units)
+(def PADDLE-Y 46.0)        ; top surface of the bottom trowel (screen frame)
+(def TOP-Y 2.0)            ; bottom surface of the top trowel
+(def PADDLE-W 9.0)
+(def PANEL-W 26)
+(def TAU (* 2.0 math/PI))
+
+(def mat-color {:spark 0xffd27a :rubber 0xff5fb0 :lead 0x9fb4d8 :marble 0xdfe8ff})
+
+;; ---------------------------------------------------------------------------
+;; state
+
+(def scr (atom nil))
+(def S (atom {}))
+(def opts (atom {}))
+(def quit? (atom false))
+(def fps-stat (atom [0.0 0 0]))
+
+(defn lvl [] (:level @S))
+(defn lv [k] (get (lvl) k))
+
+(defn theme [] (get L/themes (or (lv :theme) :indigo)))
+
+;; ---------------------------------------------------------------------------
+;; small helpers
+
+(defn clampf [x lo hi] (if (< x lo) lo (if (> x hi) hi x)))
+(defn len [x y] (math/sqrt (+ (* x x) (* y y))))
+(defn rnd [lo hi] (+ lo (* (rand) (- hi lo))))
+
+(defn float-text!
+  "Score popup at a world point; stored in screen units so it rises 'up'."
+  [wx wy s c]
+  (let [[sx sy] (gfx/w->s @scr wx wy)]
+    (swap! S update :floats conj {:x sx :y sy :s s :c c :life 1.1 :max 1.1})))
+
+(defn banner! [s c secs] (swap! S assoc :banner s :banner-c c :banner-t secs))
+
+(defn burst! [wx wy c n spd]
+  (swap! S update :parts
+         (fn [ps]
+           (let [ps (if (> (count ps) 160) (subvec ps (- (count ps) 120)) ps)]
+             (into ps (for [_ (range n)]
+                        (let [a (rnd 0 TAU) v (rnd (* 0.3 spd) spd) life (rnd 0.35 0.9)]
+                          {:x wx :y wy :vx (* v (math/cos a)) :vy (* v (math/sin a))
+                           :c c :life life :max life})))))))
+
+(defn add-score! [n] (swap! S update :score + n))
+
+;; ---------------------------------------------------------------------------
+;; frames of reference
+
+(defn open-sides
+  "World sides a ball may leave through right now."
+  []
+  (cond
+    (= :open (lv :boundary)) #{:left :right :top :bottom}
+    (lv :tilt) #{}
+    (:rot @S) #{}
+    :else
+    (let [th (:theta @S) s (math/sin th) c (math/cos th)
+          down (cond (> c 0.5) :bottom (< c -0.5) :top (> s 0.5) :right :else :left)
+          opp {:bottom :top :top :bottom :left :right :right :left}]
+      (if (lv :twin) #{down (opp down)} #{down}))))
+
+(defn paddle-level? [] (not (or (lv :tilt) (lv :ward))))
+
+;; ---------------------------------------------------------------------------
+;; ball construction
+
+(defn new-ball [x y vx vy mat]
+  {:x x :y y :vx vx :vy vy :mat mat :lead-t 0.0 :stuck nil :trail []})
+
+(defn base-speed [b]
+  (* (or (lv :speed) 24.0) (if (= :rubber (:mat b)) 1.3 1.0)))
+
+(defn stuck-ball []
+  (assoc (new-ball 24.0 40.0 0.0 0.0 :spark) :stuck (rnd -1.5 1.5)))
+
+;; ---------------------------------------------------------------------------
+;; tile hits -> rules
+
+(defn piece-done! [i types word bonus]
+  (let [p (aget w/tpiece i)]
+    (when (and (pos? p) (zero? (w/piece-left p types)))
+      (let [[cx cy] (w/tile-center i)]
+        (add-score! bonus)
+        (float-text! cx cy (str word " +" bonus) 0xfff2a0)
+        (burst! cx cy (aget w/tbase i) 26 22.0)
+        (swap! S update :sets inc)))))
+
+(defn hit-tile!
+  "Apply a hit on tile i. Returns a ball effect keyword or nil."
+  [i]
+  (let [t (aget w/tt i)
+        [cx cy] (w/tile-center i)
+        c (aget w/tbase i)
+        combo (:combo @S)
+        mult (+ 1.0 (* 0.5 (quot combo 5)))
+        brk (fn [pts]
+              (w/clear! i)
+              (swap! S update :combo inc)
+              (let [p (int (* pts mult))]
+                (add-score! p)
+                (when (> mult 1.0) (float-text! cx cy (str "+" p) c)))
+              (burst! cx cy c 9 14.0)
+              (swap! S assoc :goal-dirty true))]
+    (cond
+      (or (= t w/NORM) (= t w/RUBBER) (= t w/LEAD) (= t w/MITO))
+      (do (aset w/tt i 0) ; so piece-left sees it gone before clear! repaints
+          (aset w/tt i t)
+          (brk 10)
+          (when (= t w/NORM) (piece-done! i #{w/NORM} "SET" 100))
+          (case t 5 :split 6 :rubber 7 :lead nil))
+
+      (or (= t w/HARD) (= t w/MAGNET))
+      (if (> (aget w/thits i) 1)
+        (do (w/crack! i) (burst! cx cy c 4 8.0) nil)
+        (do (brk 25) nil))
+
+      (= t w/LAMP)
+      (do (brk 50) (burst! cx cy 0xfff0a0 30 26.0)
+          (float-text! cx cy "LIT" 0xfff0a0) nil)
+
+      (= t w/GHOST)
+      (do (w/set-ghost! i)
+          (add-score! 15)
+          (burst! cx cy (aget w/tbase i) 10 12.0)
+          (swap! S assoc :goal-dirty true)
+          (piece-done! i #{w/GHOST} "LAID" 120)
+          nil)
+
+      :else (do (burst! cx cy 0x8090a0 2 6.0) nil))))
+
+;; ---------------------------------------------------------------------------
+;; physics
+
+(defn- overlapping
+  "Solid tiles overlapped by a ball at (x,y)."
+  [x y]
+  (let [tx0 (int (math/floor (* 0.5 (- x BR)))) tx1 (int (math/floor (* 0.5 (+ x BR))))
+        ty0 (int (math/floor (* 0.5 (- y BR)))) ty1 (int (math/floor (* 0.5 (+ y BR))))]
+    (loop [ty ty0 acc nil]
+      (if (> ty ty1) acc
+          (recur (inc ty)
+                 (loop [tx tx0 acc acc]
+                   (if (> tx tx1) acc
+                       (recur (inc tx)
+                              (let [t (w/tile-at tx ty)]
+                                (if (w/solid-type? t) (conj (or acc []) (+ tx (* ty w/G))) acc))))))))))
+
+(def pierceable #{1 2 5 6 7 10})
+
+(defn- axis-move
+  "Move ball along one axis (0 = x, 1 = y). Returns updated ball; collects
+   ball effects into the :fx vector on the ball."
+  [b axis dt]
+  (let [kp (if (zero? axis) :x :y) kv (if (zero? axis) :vx :vy)
+        np (+ (get b kp) (* (get b kv) dt))
+        nb (assoc b kp np)
+        hits (overlapping (:x nb) (:y nb))]
+    (if (nil? hits)
+      nb
+      (let [lead? (and (= :lead (:mat b)) (every? #(contains? pierceable (aget w/tt %)) hits))
+            effects (doall (map hit-tile! hits))
+            b (update b :fx into (remove nil? effects))]
+        (if lead?
+          nb
+          (let [rest (if (lv :tilt) 0.55 1.0)]
+            (assoc b kv (* -1.0 rest (get b kv)))))))))
+
+(defn- walls
+  "World boundary: reflect on closed sides."
+  [b open]
+  (let [{:keys [x y vx vy]} b
+        lo BR hi (- 48.0 BR)
+        rest (if (lv :tilt) 0.55 1.0)
+        b (cond (and (< x lo) (neg? vx) (not (open :left))) (assoc b :x lo :vx (* rest (- vx)))
+                (and (> x hi) (pos? vx) (not (open :right))) (assoc b :x hi :vx (* rest (- vx)))
+                :else b)
+        {:keys [y vy]} b]
+    (cond (and (< y lo) (neg? vy) (not (open :top))) (assoc b :y lo :vy (* rest (- vy)))
+          (and (> y hi) (pos? vy) (not (open :bottom))) (assoc b :y hi :vy (* rest (- vy)))
+          :else b)))
+
+(defn- paddle-bounce
+  "Bounce off the trowel(s), computed in the screen frame."
+  [b]
+  (let [sc @scr
+        [sx sy] (gfx/w->s sc (:x b) (:y b))
+        [svx svy] (gfx/rot-vec sc (:vx b) (:vy b) 1)
+        {px :x pv :v} (:paddle @S)
+        hw (* 0.5 PADDLE-W)
+        mag? (pos? (:mag-t @S 0.0))
+        bounce (fn [dir surface]
+                 ;; dir -1 = launch upwards (bottom trowel), +1 downwards (top)
+                 (let [off (clampf (/ (- sx px) hw) -1.0 1.0)
+                       sp (max (len svx svy) (base-speed b))
+                       ang (* off 1.05)
+                       nvx (+ (* sp (math/sin ang)) (* 0.12 pv))
+                       nvy (* dir sp (math/cos ang))
+                       f (/ sp (len nvx nvy))
+                       nvx (* f nvx) nvy (* f nvy)
+                       nsy (- surface (* -1 dir BR))
+                       [wx wy] (gfx/s->w sc sx (if (neg? dir) (- surface BR) (+ surface BR)))
+                       [wvx wvy] (gfx/rot-vec sc nvx nvy -1)]
+                   (swap! S assoc :combo 0)
+                   (if (and mag? (neg? dir))
+                     (assoc b :x wx :y wy :vx 0.0 :vy 0.0 :stuck (- sx px))
+                     (assoc b :x wx :y wy :vx wvx :vy wvy))))]
+    (cond
+      (and (pos? svy) (>= (+ sy BR) PADDLE-Y) (<= (- sy BR) (+ PADDLE-Y 1.0))
+           (<= (math/abs (- sx px)) (+ hw BR)))
+      (bounce -1.0 PADDLE-Y)
+      (and (lv :twin) (neg? svy) (<= (- sy BR) TOP-Y) (>= (+ sy BR) (- TOP-Y 1.0))
+           (<= (math/abs (- sx px)) (+ hw BR)))
+      (bounce 1.0 TOP-Y)
+      :else b)))
+
+(defn- forces
+  "Acceleration on a ball (world frame)."
+  [b]
+  (let [sc @scr
+        g (or (lv :gravity) 0.0)
+        g (if (= :lead (:mat b)) (* 1.8 g) g)
+        [gx gy] (if (pos? g) (gfx/rot-vec sc 0.0 g -1) [0.0 0.0])
+        [tx ty] (if (lv :tilt)
+                  (let [[a c] (:tilt @S)] [(* 40.0 a) (* 40.0 c)])
+                  [0.0 0.0])
+        ;; lodestones
+        [mx my] (reduce (fn [[ax ay] [lx ly]]
+                          (let [dx (- lx (:x b)) dy (- ly (:y b)) d2 (+ (* dx dx) (* dy dy))]
+                            (if (< d2 220.0)
+                              (let [f (/ 900.0 (+ d2 8.0)) d (math/sqrt d2)]
+                                [(+ ax (* f (/ dx d))) (+ ay (* f (/ dy d)))])
+                              [ax ay])))
+                        [0.0 0.0] (:lodes @S))
+        ;; trowel lodestone
+        [px py] (if (pos? (:mag-t @S 0.0))
+                  (let [[sx sy] (gfx/w->s sc (:x b) (:y b))
+                        dx (- (:x (:paddle @S)) sx) dy (- PADDLE-Y sy)]
+                    (if (< (len dx dy) 26.0)
+                      (gfx/rot-vec sc (* 6.0 dx) (* 6.0 dy) -1)
+                      [0.0 0.0]))
+                  [0.0 0.0])]
+    [(+ gx tx mx px) (+ gy ty my py)]))
+
+(defn step-ball
+  "One physics step. Returns the ball (maybe with :fx) or nil when lost."
+  [b dt open]
+  (if (:stuck b)
+    b
+    (let [[ax ay] (forces b)
+          b (assoc b :vx (+ (:vx b) (* ax dt)) :vy (+ (:vy b) (* ay dt)))
+          b (if (lv :tilt)
+              (let [f (- 1.0 (* 0.45 dt)) v (len (:vx b) (:vy b)) cap 42.0
+                    f (if (> v cap) (* f (/ cap v)) f)]
+                (assoc b :vx (* f (:vx b)) :vy (* f (:vy b))))
+              b)
+          b (-> b (axis-move 0 dt) (axis-move 1 dt) (walls open))
+          b (if (paddle-level?) (paddle-bounce b) b)
+          {:keys [x y]} b
+          tile (w/tile-at (int (math/floor (* 0.5 x))) (int (math/floor (* 0.5 y))))]
+      (cond
+        (= tile w/PIT) (assoc b :lost :pit)
+        (or (< x -3.0) (> x 51.0) (< y -3.0) (> y 51.0)) (assoc b :lost :out)
+        (and (paddle-level?) (not (:rot @S))
+             (let [[_ sy] (gfx/w->s @scr x y)]
+               (or (> sy 49.5) (and (lv :twin) (< sy -1.5)))))
+        (assoc b :lost :out)
+        :else b))))
+
+(defn normalize-speed
+  "Paddle levels without gravity keep a constant speed per material, and the
+   screen-vertical component never drops below 30% (no endless horizontals)."
+  [b]
+  (if (or (:stuck b) (lv :tilt) (lv :gravity)) b
+      (let [sp (len (:vx b) (:vy b))
+            target (base-speed b)]
+        (if (< sp 0.01) b
+            (let [f (/ target sp)
+                  vx (* f (:vx b)) vy (* f (:vy b))]
+              (if (paddle-level?)
+                (let [sc @scr
+                      [svx svy] (gfx/rot-vec sc vx vy 1)
+                      min-y (* 0.3 target)]
+                  (if (< (math/abs svy) min-y)
+                    (let [nsy (if (neg? svy) (- min-y) min-y)
+                          nsx (* (if (neg? svx) -1.0 1.0) (math/sqrt (- (* target target) (* nsy nsy))))
+                          [wx wy] (gfx/rot-vec sc nsx nsy -1)]
+                      (assoc b :vx wx :vy wy))
+                    (assoc b :vx vx :vy vy)))
+                (assoc b :vx vx :vy vy)))))))
+
+(defn apply-fx
+  "Turn the :fx a ball collected this step into ball changes / new balls."
+  [b]
+  (let [fx (:fx b) b (dissoc b :fx)]
+    (if (empty? fx) [b]
+        (reduce
+         (fn [bs e]
+           (let [b (first bs)]
+             (case e
+               :rubber (do (float-text! (:x b) (:y b) "RUBBER" 0xff5fb0)
+                           (cons (assoc b :mat :rubber) (rest bs)))
+               :lead (do (float-text! (:x b) (:y b) "LEAD" 0x9fb4d8)
+                         (cons (assoc b :mat :lead :lead-t 9.0) (rest bs)))
+               :split (let [a (rnd 0.35 0.6)
+                            rot (fn [vx vy a] [(- (* vx (math/cos a)) (* vy (math/sin a)))
+                                               (+ (* vx (math/sin a)) (* vy (math/cos a)))])
+                            [v1x v1y] (rot (:vx b) (:vy b) a)
+                            [v2x v2y] (rot (:vx b) (:vy b) (- a))]
+                        (float-text! (:x b) (:y b) "MITOSIS" 0x7cf2b0)
+                        (burst! (:x b) (:y b) 0x7cf2b0 14 16.0)
+                        (concat [(assoc b :vx v1x :vy v1y)
+                                 (assoc b :vx v2x :vy v2y :trail [])]
+                                (rest bs)))
+               bs)))
+         [b] fx))))
+
+;; ---------------------------------------------------------------------------
+;; level lifecycle
+
+(defn recount-goal! []
+  (let [goal (lv :goal)
+        n (case goal
+            :clear (w/count-where w/breakable?)
+            :build (w/count-where #(= % w/GHOST))
+            :lamps (w/count-where #(= % w/LAMP))
+            :heart (w/count-where w/breakable?)
+            0)]
+    (swap! S assoc :goal-left n :goal-dirty false)))
+
+(defn lodestones []
+  (mapv w/tile-center (w/indices-where #(= % w/MAGNET))))
+
+(declare choose-ward!)
+
+(defn spawn-balls! []
+  (let [l (lvl) starts (:starts @S)]
+    (swap! S assoc :balls
+           (cond
+             (:tilt l) (mapv (fn [[x y]] (new-ball x y 0.0 0.0 :marble)) starts)
+             (:ward l) (mapv (fn [[x y]] (let [a (rnd 0 TAU) sp (:speed l)]
+                                           (new-ball x y (* sp (math/cos a)) (* sp (math/sin a)) :spark)))
+                             starts)
+             :else (vec (for [j (range (or (:balls l) 1))]
+                          (assoc (stuck-ball) :stuck (+ -2.0 (* 4.0 j)))))))))
+
+(defn load-level! [li]
+  (let [l (if (neg? li) L/title-level (nth L/levels li))
+        th (get L/themes (:theme l))
+        {:keys [starts]} (w/load-map! (:map l) th (+ 11 (max li 0)))]
+    (swap! S merge
+           {:li li :level l :starts starts
+            :theta 0.0 :rot nil :rot-timer (or (:rotate l) 0.0) :rot-dir 1.0
+            :paddle {:x 24.0 :v 0.0}
+            :parts [] :floats [] :combo 0 :sets 0
+            :mag-t 0.0 :mag-cd 0.0 :tilt [0.0 0.0]
+            :ward -1 :ward-t 0.0 :ward-save nil
+            :decay-t (or (:decay l) 0.0)
+            :time 0.0 :banner nil :banner-t 0.0
+            :lodes (lodestones)})
+    (gfx/set-angle! @scr 0.0)
+    (spawn-balls!)
+    (when (:ward l) (choose-ward!))
+    (recount-goal!)
+    (gfx/invalidate! @scr)))
+
+;; ---------------------------------------------------------------------------
+;; the heart: a borrowed tile
+
+(defn ward-colour [t]
+  (gfx/mix 0xfff4e0 0xff4060 (+ 0.5 (* 0.5 (math/sin (* t 7.0))))))
+
+(defn release-ward! []
+  (let [i (:ward @S) sv (:ward-save @S)]
+    (when (and (>= i 0) sv (= (aget w/tt i) w/WARD))
+      (let [[t base hits] sv]
+        (w/put! i t base)
+        (aset w/thits i hits)))
+    (swap! S assoc :ward -1 :ward-save nil)))
+
+(defn choose-ward! []
+  (release-ward!)
+  (let [cands (w/indices-where w/breakable?)]
+    (when (seq cands)
+      (let [i (rand-nth cands)
+            [cx cy] (w/tile-center i)]
+        (swap! S assoc :ward i :ward-t 8.0
+               :ward-save [(aget w/tt i) (aget w/tbase i) (aget w/thits i)])
+        (w/put! i w/WARD 0xfff4e0)
+        (float-text! cx cy "YOURS" 0xfff4e0)))))
+
+(defn move-ward! [dx dy]
+  (let [i (:ward @S)]
+    (when (>= i 0)
+      (let [x (+ (mod i w/G) dx) y (+ (quot i w/G) dy)
+            j (+ x (* y w/G))]
+        (when (and (>= x 0) (< x w/G) (>= y 0) (< y w/G) (= w/EMPTY (aget w/tt j))
+                   (not-any? (fn [b] (let [bx (int (math/floor (* 0.5 (:x b))))
+                                           by (int (math/floor (* 0.5 (:y b))))]
+                                       (and (<= (math/abs (- bx x)) 1) (<= (math/abs (- by y)) 1)
+                                            (let [[cx cy] (w/tile-center j)]
+                                              (and (< (math/abs (- cx (:x b))) (+ 1.0 BR))
+                                                   (< (math/abs (- cy (:y b))) (+ 1.0 BR)))))))
+                             (:balls @S)))
+          (w/clear! i)
+          (w/put! j w/WARD 0xfff4e0)
+          (swap! S assoc :ward j))))))
+
+;; ---------------------------------------------------------------------------
+;; update
+
+(defn start-rotation! []
+  (let [dir (if (< (rand) 0.5) 1.0 -1.0)
+        th (:theta @S)]
+    (swap! S assoc :rot {:from th :to (+ th (* dir 0.5 math/PI)) :t 0.0 :dur 1.2})
+    (banner! "THE SKY TURNS" (:accent (theme)) 1.2)))
+
+(defn ease [t] (if (< t 0.5) (* 2 t t) (- 1.0 (/ (math/pow (+ (* -2.0 t) 2.0) 2) 2.0))))
+
+(defn update-rotation! [dt]
+  (let [st @S]
+    (if-let [r (:rot st)]
+      (let [t (+ (:t r) dt)
+            u (min 1.0 (/ t (:dur r)))
+            th (+ (:from r) (* (- (:to r) (:from r)) (ease u)))]
+        (if (>= u 1.0)
+          (let [th (mod (:to r) TAU)
+                th (* (math/round (/ th (* 0.5 math/PI))) 0.5 math/PI)]
+            (swap! S assoc :rot nil :theta th :rot-timer (lv :rotate))
+            (gfx/set-angle! @scr th))
+          (do (swap! S assoc :rot (assoc r :t t) :theta th)
+              (gfx/set-angle! @scr th)))
+        (gfx/invalidate! @scr))
+      (when (lv :rotate)
+        (let [rt (- (:rot-timer st) dt)]
+          (swap! S assoc :rot-timer rt)
+          (when (<= rt 0.0) (start-rotation!)))))))
+
+(defn autopilot
+  "Paddle target for --autoplay and the title attract mode."
+  []
+  (let [sc @scr
+        threats (for [b (:balls @S) :when (not (:stuck b))
+                      :let [[sx sy] (gfx/w->s sc (:x b) (:y b))
+                            [vx vy] (gfx/rot-vec sc (:vx b) (:vy b) 1)]]
+                  [sx sy vx vy])
+        down (filter (fn [[_ _ _ vy]] (pos? vy)) threats)
+        pick (if (seq down) (apply max-key second down) (first threats))]
+    (if pick
+      (let [[sx sy vx vy] pick
+            ;; lead the ball to the paddle line, folding wall bounces
+            tt (if (pos? vy) (/ (- PADDLE-Y sy) vy) 0.0)
+            x (+ sx (* vx (min tt 1.5)))
+            x (let [m (mod x 96.0)] (if (> m 48.0) (- 96.0 m) m))]
+        (+ x (* 2.2 (math/sin (* 0.7 (:time @S))))))
+      24.0)))
+
+(defn update-paddle! [dt]
+  (let [p (:paddle @S)
+        hw (* 0.5 PADDLE-W)
+        auto? (or (:autoplay @opts) (neg? (:li @S)))
+        mx @in/mouse-x
+        sc @scr
+        target (cond
+                 auto? (autopilot)
+                 (and @in/mouse-moved mx) (/ (- mx (:ox sc) -0.5) (:k sc))
+                 :else nil)
+        ax (in/axis [:left :a :h] [:right :d :l])
+        v (if target
+            (clampf (* 14.0 (- target (:x p))) -110.0 110.0)
+            (let [want (* ax 62.0)]
+              (+ (:v p) (* (- want (:v p)) (min 1.0 (* dt 22.0))))))
+        x (clampf (+ (:x p) (* v dt)) hw (- 48.0 hw))
+        v (if (or (= x hw) (= x (- 48.0 hw))) 0.0 v)]
+    (when (not= 0 ax) (reset! in/mouse-moved false))
+    (swap! S assoc :paddle {:x x :v v})))
+
+(defn update-tilt! [dt]
+  (let [ax (in/axis [:left :a :h] [:right :d :l])
+        ay (in/axis [:up :w :k] [:down :s :j])
+        [tx ty] (:tilt @S)
+        auto? (:autoplay @opts)
+        [ax ay] (if auto?
+                  (let [b (first (:balls @S))
+                        lamps (w/indices-where #(= % w/LAMP))]
+                    (if (and b (seq lamps))
+                      (let [i (apply min-key (fn [i] (let [[x y] (w/tile-center i)]
+                                                       (len (- x (:x b)) (- y (:y b)))))
+                                     lamps)
+                            [x y] (w/tile-center i)]
+                        [(math/signum (- x (:x b))) (math/signum (- y (:y b)))])
+                      [0 0]))
+                  [ax ay])
+        rate (* 2.5 dt)
+        mv (fn [cur a] (clampf (+ cur (* a rate)) -1.0 1.0))]
+    (swap! S assoc :tilt [(mv tx ax) (mv ty ay)])))
+
+(defn lose-ball! [b]
+  (let [[sx sy] (gfx/w->s @scr (:x b) (:y b))]
+    (burst! (clampf (:x b) 1.0 47.0) (clampf (:y b) 1.0 47.0) 0xff5050 18 18.0)))
+
+(defn life-lost! []
+  (let [st (swap! S update :lives dec)]
+    (if (<= (:lives st) 0)
+      (do (swap! S assoc :mode :over :mode-t 0.0)
+          (banner! "THE GROUT SETTLES" 0xff6070 99.0))
+      (do (banner! (if (lv :tilt) "MARBLE LOST" "SPARK LOST") 0xff7080 1.4)
+          (swap! S assoc :combo 0)
+          (if (lv :tilt)
+            (swap! S assoc :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
+                                             0.0 0.0 :marble)])
+            (spawn-balls!))))))
+
+(defn level-won! []
+  (let [secs (:time @S)
+        bonus (+ 500 (max 0 (int (- 1500 (* 10 secs)))))]
+    (add-score! bonus)
+    (release-ward!)
+    (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus)
+    (banner! "MOSAIC RESTORED" 0xfff2a0 3.0)))
+
+(defn step-world! [dt]
+  (let [open (open-sides)
+        n (max 1 (int (math/ceil (/ dt DT))))
+        h (/ dt n)]
+    (dotimes [_ n]
+      (let [bs (:balls @S)
+            stepped (mapcat (fn [b] (let [b (step-ball (assoc b :fx []) h open)]
+                                      (if (:lost b) [b] (apply-fx b))))
+                            bs)
+            lost (filter :lost stepped)
+            live (vec (remove :lost stepped))
+            live (if (> (count live) 14) (subvec live 0 14) live)]
+        (doseq [b lost] (lose-ball! b)
+          (when (= :pit (:lost b)) (float-text! (:x b) (:y b) "FELL" 0xff7080)))
+        (swap! S assoc :balls live)))
+    (when (and (empty? (:balls @S)) (not= :over (:mode @S)))
+      (if (neg? (:li @S)) (spawn-balls!) (life-lost!)))))
+
+(defn update-balls-frame! [dt]
+  ;; per frame: stuck balls ride the paddle, trails, lead timeout, speed
+  (let [sc @scr px (:x (:paddle @S))]
+    (swap! S update :balls
+           (fn [bs]
+             (mapv (fn [b]
+                     (let [b (if-let [off (:stuck b)]
+                               (let [[wx wy] (gfx/s->w sc (+ px off) (- PADDLE-Y BR 0.05))]
+                                 (assoc b :x wx :y wy))
+                               b)
+                           b (if (= :lead (:mat b))
+                               (let [t (- (:lead-t b) dt)]
+                                 (if (<= t 0) (assoc b :mat :spark :lead-t 0.0) (assoc b :lead-t t)))
+                               b)
+                           tr (:trail b)
+                           tr (conj (if (>= (count tr) 5) (subvec tr 1) tr) [(:x b) (:y b)])]
+                       (normalize-speed (assoc b :trail tr))))
+                   bs)))))
+
+(defn launch! []
+  (let [sc @scr]
+    (swap! S update :balls
+           (fn [bs]
+             (mapv (fn [b]
+                     (if-let [off (:stuck b)]
+                       (let [sp (base-speed b)
+                             a (+ (* 0.15 off) (rnd -0.25 0.25))
+                             [vx vy] (gfx/rot-vec sc (* sp (math/sin a)) (* -1 sp (math/cos a)) -1)]
+                         (assoc b :stuck nil :vx vx :vy vy))
+                       b))
+                   bs)))))
+
+(defn update-fx! [dt]
+  (swap! S update :parts
+         (fn [ps] (into [] (comp (map (fn [p] (assoc p :x (+ (:x p) (* dt (:vx p)))
+                                                     :y (+ (:y p) (* dt (:vy p)))
+                                                     :vx (* (:vx p) 0.95) :vy (* (:vy p) 0.95)
+                                                     :life (- (:life p) dt))))
+                                 (filter #(pos? (:life %))))
+                        ps)))
+  (swap! S update :floats
+         (fn [fs] (into [] (comp (map (fn [f] (assoc f :y (- (:y f) (* dt 4.0)) :life (- (:life f) dt))))
+                                 (filter #(pos? (:life %))))
+                        fs)))
+  (swap! S update :banner-t - dt))
+
+(defn update-play! [dt]
+  (swap! S update :time + dt)
+  (update-rotation! dt)
+  (if (lv :tilt) (update-tilt! dt) (update-paddle! dt))
+  (swap! S update :mag-t #(max 0.0 (- % dt)))
+  (swap! S update :mag-cd #(max 0.0 (- % dt)))
+  ;; the heart's borrowed tile
+  (when (lv :ward)
+    (let [t (- (:ward-t @S) dt)]
+      (swap! S assoc :ward-t t)
+      (when (<= t 0.0) (choose-ward!))
+      (let [i (:ward @S)]
+        (when (>= i 0)
+          (let [c (ward-colour (:time @S))]
+            (aset w/tbase i c) (aset w/tdot i c)
+            (aset w/thl i (gfx/mix c 0xffffff 0.5)) (aset w/tsh i (gfx/scale c 0.6))
+            (w/changed! i))))))
+  ;; grout creep: a set tile loosens
+  (when (lv :decay)
+    (let [t (- (:decay-t @S) dt)]
+      (if (<= t 0.0)
+        (let [sets (w/indices-where #(= % w/SETT))]
+          (when (seq sets)
+            (let [i (rand-nth sets) [cx cy] (w/tile-center i)]
+              (w/unset! i)
+              (burst! cx cy 0x8a8070 12 10.0)
+              (float-text! cx cy "CRUMBLE" 0xb0a090)
+              (swap! S assoc :goal-dirty true)))
+          (swap! S assoc :decay-t (lv :decay)))
+        (swap! S assoc :decay-t t))))
+  (when (and (:autoplay @opts) (some :stuck (:balls @S)) (> (:time @S) 0.8)) (launch!))
+  (when (neg? (:li @S)) (when (some :stuck (:balls @S)) (launch!)))
+  (update-balls-frame! dt)
+  (step-world! dt)
+  (when (:goal-dirty @S) (recount-goal!))
+  (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
+    (if (neg? (:li @S))
+      (load-level! -1)
+      (level-won!))))
+
+;; ---------------------------------------------------------------------------
+;; rendering
+
+(defn draw-arena! [^StringBuilder sb]
+  (let [sc @scr st @S t (:time st)]
+    ;; balls: trail then core
+    (doseq [b (:balls st)]
+      (let [c (get mat-color (:mat b) 0xffd27a)
+            tr (:trail b) n (count tr)]
+        (dotimes [j (dec n)]
+          (let [[x y] (nth tr j) f (/ (inc j) (* 1.0 n))]
+            (gfx/glow! sc x y 1.4 0.4 c (* 0.22 f))))
+        (gfx/glow! sc (:x b) (:y b) 3.4 BR c 1.0)))
+    ;; lodestone shimmer
+    (doseq [[x y] (:lodes st)]
+      (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
+        (gfx/glow! sc x y (+ 4.0 (* 1.0 (math/sin (* 3.0 t)))) 0.0 0xd03050 0.25)))
+    ;; particles
+    (doseq [p (:parts st)]
+      (gfx/glow! sc (:x p) (:y p) 1.1 0.35 (:c p) (/ (:life p) (:max p))))
+    ;; trowels (screen frame)
+    (when (paddle-level?)
+      (let [px (:x (:paddle st)) hw (* 0.5 PADDLE-W)
+            mag? (pos? (:mag-t st))
+            c (if mag? (gfx/mix 0xff6a8a 0xffffff (* 0.5 (+ 1 (math/sin (* 20 t))))) 0xcfe9ff)]
+        (gfx/rect! sc (- px hw) PADDLE-Y (+ px hw) (+ PADDLE-Y 1.0) c)
+        (when (lv :twin)
+          (gfx/rect! sc (- px hw) (- TOP-Y 1.0) (+ px hw) TOP-Y c))
+        (when mag?
+          (let [[wx wy] (gfx/s->w sc px (- PADDLE-Y 1.5))]
+            (gfx/glow! sc wx wy 7.0 0.0 0xff4070 0.35)))))
+    ;; floating text (screen units)
+    (let [k (:k sc)]
+      (doseq [f (:floats st)]
+        (let [c (gfx/scale (:c f) (min 1.0 (* 1.6 (/ (:life f) (:max f)))))]
+          (gfx/text! sc (- (int (* (:x f) k)) (quot (count (:s f)) 2))
+                     (quot (int (* (:y f) k)) 2) (:s f) c))))
+    ;; banner
+    (when (and (:banner st) (pos? (:banner-t st)))
+      (let [s (str " " (:banner st) " ")]
+        (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (quot (:rows sc) 2) s (:banner-c st))))
+    (when (and (paddle-level?) (some :stuck (:balls st)) (not (neg? (:li st))) (= :play (:mode st)))
+      (let [s "SPACE · launch"]
+        (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (- (:rows sc) 5) s 0xa0a8c0)))
+    (gfx/compose! sc w/sample sb)))
+
+(def panel-cache (atom {}))
+
+(defn panel-line! [^StringBuilder sb row s c]
+  (let [sc @scr
+        s (let [s (str s)] (if (> (count s) (- PANEL-W 1)) (subs s 0 (- PANEL-W 1)) s))
+        s (str s (apply str (repeat (- PANEL-W (count s)) " ")))
+        key [s c]]
+    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (not= key (get @panel-cache row)))
+      (swap! panel-cache assoc row key)
+      (gfx/at sb (:panel-x sc) row)
+      (gfx/bg! sb 0x000000)
+      (gfx/fg! sb c)
+      (.append sb s))))
+
+(defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
+
+(defn controls []
+  (cond
+    (neg? (:li @S)) ["SPACE  begin" "1-0    jump to level" "Q      quit"]
+    (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
+    (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
+    (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
+    :else ["←→/mouse  trowel" "SPACE  launch" "P pause  Q menu"]))
+
+(defn draw-panel! [^StringBuilder sb]
+  (let [sc @scr st @S l (lvl) top (:oy sc) acc (:accent (theme))
+        title? (neg? (:li st))
+        r (fn [i] (+ top i))
+        goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left" "")
+        [fps cells bytes] @fps-stat]
+    (panel-line! sb (r 0) "T E S S E R A E" acc)
+    (panel-line! sb (r 1) "──────────────────────" 0x404660)
+    (if title?
+      (do (panel-line! sb (r 2) "a mosaic breaker" 0x9098b0)
+          (panel-line! sb (r 3) "" 0)
+          (doseq [[j lv] (map-indexed vector L/levels)]
+            (panel-line! sb (r (+ 4 j)) (str (mod (inc j) 10) "  " (:id lv) " " (:name lv)) 0xb0b8d0))
+          (panel-line! sb (r 14) "" 0)
+          (panel-line! sb (r 15) (str "best  " (:best st 0)) 0x808aa0))
+      (do (panel-line! sb (r 2) (:chapter l) acc)
+          (panel-line! sb (r 3) (str (:id l) "  " (:name l)) 0xe8ecf8)
+          (panel-line! sb (r 4) "" 0)
+          (panel-line! sb (r 5) (format "SCORE %10d" (:score st)) 0xfff2c0)
+          (panel-line! sb (r 6) (str "SPARKS  " (pips (:lives st) 5)) 0xff9a9a)
+          (panel-line! sb (r 7) (str "BALLS   " (count (:balls st))) 0xc8d0e8)
+          (panel-line! sb (r 8) (str "COMBO   x" (+ 1.0 (* 0.5 (quot (:combo st) 5)))) 0xc8d0e8)
+          (panel-line! sb (r 9) (str "GOAL    " (:goal-left st) " " goal-word) 0xc8d0e8)
+          (panel-line! sb (r 10)
+                       (cond (:rot st) "↻ TURNING"
+                             (:rotate l) (str "↻ turn in " (int (math/ceil (:rot-timer st))) "s")
+                             (:ward l) (str "tile lent for " (int (math/ceil (:ward-t st))) "s")
+                             (:decay l) (str "grout creeps " (int (math/ceil (:decay-t st))) "s")
+                             (:magnet l) (if (pos? (:mag-cd st)) "magnet charging" "magnet READY")
+                             (:tilt l) (let [[a c] (:tilt st)] (format "tilt %+.1f %+.1f" a c))
+                             :else "")
+                       (if (and (:rotate l) (< (:rot-timer st) 3.0)) 0xffe070 acc))
+          (panel-line! sb (r 11) (str "time    " (int (:time st)) "s") 0x808aa0)))
+    (let [cs (controls)]
+      (doseq [[j s] (map-indexed vector cs)]
+        (panel-line! sb (r (+ 17 j)) s 0x8890a8)))
+    (when (:hud-stats @opts)
+      (panel-line! sb (r 21) (format "%2.0ffps %4dc %5.1fKB" fps cells (/ bytes 1024.0)) 0x505870))))
+
+(defn draw-frame-border! [^StringBuilder sb]
+  (let [sc @scr]
+    (when (:framed? sc)
+      (let [x0 (dec (:ox sc)) y0 (dec (:oy sc)) x1 (+ (:ox sc) (:cols sc)) y1 (+ (:oy sc) (:rows sc))
+            st @S
+            warn? (and (lv :rotate) (not (:rot st)) (< (:rot-timer st) 3.0))
+            c (cond (:rot st) 0xffffff
+                    warn? (if (even? (int (* 6 (:rot-timer st)))) 0xffe070 0x5a4a10)
+                    :else (gfx/scale (:accent (theme)) 0.55))
+            key [c x0 y0]]
+        (when (not= key (:border-key @S))
+          (swap! S assoc :border-key key)
+          (gfx/bg! sb 0x000000) (gfx/fg! sb c)
+          (gfx/at sb x0 y0) (.append sb (str "╭" (apply str (repeat (:cols sc) "─")) "╮"))
+          (gfx/at sb x0 y1) (.append sb (str "╰" (apply str (repeat (:cols sc) "─")) "╯"))
+          (doseq [y (range (inc y0) y1)]
+            (gfx/at sb x0 y) (.append sb "│")
+            (gfx/at sb x1 y) (.append sb "│")))))))
+
+;; ---------------------------------------------------------------------------
+;; story cards
+
+(defn wrap-text [s width]
+  (if (str/blank? s) [""]
+      (loop [words (str/split s #" ") line "" out []]
+        (if (empty? words) (conj out line)
+            (let [wd (first words)
+                  cand (if (= line "") wd (str line " " wd))]
+              (if (> (count cand) width)
+                (recur (rest words) wd (conj out line))
+                (recur (rest words) cand out)))))))
+
+(defn draw-card! [^StringBuilder sb]
+  (let [sc @scr st @S
+        {:keys [title lines]} (:card st)
+        tc (:tc sc) tr (:tr sc)
+        width (min 60 (- tc 8))
+        wrapped (vec (mapcat #(wrap-text % width) lines))
+        shown (int (* 70 (:mode-t st)))
+        x0 (max 1 (quot (- tc width) 2))
+        y0 (max 2 (quot (- tr (count wrapped) 6) 2))
+        acc (:card-accent st 0xffd27a)]
+    (when (:card-fresh st)
+      (swap! S assoc :card-fresh false)
+      (gfx/reset-sgr! sb) (gfx/bg! sb 0x05050a) (.append sb (str gfx/ESC "[2J")))
+    (gfx/bg! sb 0x05050a)
+    (gfx/at sb x0 y0) (gfx/fg! sb acc) (.append sb title)
+    (gfx/at sb x0 (inc y0)) (gfx/fg! sb (gfx/scale acc 0.4))
+    (.append sb (apply str (repeat (min width (count title)) "─")))
+    (loop [j 0 left shown]
+      (when (< j (count wrapped))
+        (let [ln (nth wrapped j)
+              vis (subs ln 0 (max 0 (min (count ln) left)))]
+          (gfx/at sb x0 (+ y0 3 j)) (gfx/fg! sb 0xd8dcea) (.append sb vis)
+          (recur (inc j) (- left (count ln) 1)))))
+    (let [total (reduce + (map #(inc (count %)) wrapped))]
+      (gfx/at sb x0 (+ y0 4 (count wrapped)))
+      (gfx/fg! sb (if (> shown total)
+                    (gfx/mix 0x303040 0xa0a8c8 (* 0.5 (+ 1 (math/sin (* 4 (:mode-t st))))))
+                    0x05050a))
+      (.append sb "SPACE to continue"))))
+
+(defn show-card! [title lines accent then]
+  (swap! S assoc :mode :card :mode-t 0.0 :card {:title title :lines lines}
+         :card-fresh true :card-accent accent :card-then then))
+
+;; ---------------------------------------------------------------------------
+;; flow
+
+(defn clear-screen! []
+  (reset! panel-cache {})
+  (swap! S assoc :border-key nil)
+  (term/write (str gfx/ESC "[0m" gfx/ESC "[48;2;0;0;0m" gfx/ESC "[2J"))
+  (gfx/invalidate! @scr))
+
+(defn enter-level! [li]
+  (clear-screen!)
+  (load-level! li)
+  (swap! S assoc :mode :play :mode-t 0.0))
+
+(defn begin-level! [li]
+  (if (>= li (count L/levels))
+    (do (swap! S update :best (fnil max 0) (:score @S))
+        (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title]))
+    (let [l (nth L/levels li)]
+      (load-level! li)
+      (show-card! (str (:chapter l) "  ·  " (:name l)) (:card l)
+                  (:accent (get L/themes (:theme l))) [:level li]))))
+
+(defn to-title! []
+  (clear-screen!)
+  (load-level! -1)
+  (swap! S assoc :mode :play :mode-t 0.0))
+
+(defn new-game! [li]
+  (swap! S assoc :score 0 :lives 5)
+  (if (zero? li)
+    (show-card! "PROLOGUE" L/prologue 0xffd27a [:begin 0])
+    (begin-level! li)))
+
+(defn card-done! []
+  (let [[what arg] (:card-then @S)]
+    (case what
+      :begin (begin-level! arg)
+      :level (enter-level! arg)
+      :title (to-title!)
+      nil)))
+
+(defn handle-event! [[k ev]]
+  (let [st @S mode (:mode st) title? (neg? (:li st))]
+    (cond
+      (= k :ctrl-c) (reset! quit? true)
+      (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
+                        (gfx/set-angle! @scr (:theta st))
+                        (clear-screen!)
+                        (when (= mode :card) (swap! S assoc :card-fresh true)))
+      (= mode :card) (when (and (contains? #{:space :enter :click} k) (= ev :press))
+                       (if (< (* 70 (:mode-t st)) 400)
+                         (swap! S assoc :mode-t 99.0)
+                         (card-done!)))
+      title? (cond (contains? #{:q :esc} k) (reset! quit? true)
+                   (contains? #{:space :enter :click} k) (new-game! 0)
+                   (and (keyword? k) (re-matches #"[0-9]" (name k)))
+                   (let [n (parse-long (name k))] (new-game! (if (zero? n) 9 (dec n)))))
+      (= mode :over) (cond (contains? #{:space :enter} k)
+                           (do (swap! S assoc :lives 5 :score (quot (:score st) 2))
+                               (enter-level! (:li st)))
+                           (contains? #{:q :esc} k) (to-title!))
+      (= mode :pause) (cond (contains? #{:p :space} k) (swap! S assoc :mode :play :banner-t 0.0)
+                            (contains? #{:q :esc} k) (to-title!))
+      (= mode :play)
+      (cond
+        (contains? #{:q :esc} k) (to-title!)
+        (= k :p) (do (swap! S assoc :mode :pause) (banner! "PAUSED" 0xffffff 1e9))
+        (= k :r) (enter-level! (:li st))
+        (= k :rbracket) (level-won!)
+        (contains? #{:space :click} k)
+        (cond (some :stuck (:balls st)) (launch!)
+              (lv :tilt) (swap! S assoc :tilt [0.0 0.0])
+              (and (lv :magnet) (zero? (:mag-cd st))) (swap! S assoc :mag-t 1.4 :mag-cd 3.5)
+              :else nil)
+        (and (lv :ward) (= k :tab)) (do (add-score! -25) (choose-ward!))
+        (lv :ward) (case k
+                     (:left :a :h) (move-ward! -1 0)
+                     (:right :d :l) (move-ward! 1 0)
+                     (:up :w :k) (move-ward! 0 -1)
+                     (:down :s :j) (move-ward! 0 1)
+                     nil)
+        :else nil)
+      :else nil)))
+
+(defn update! [dt]
+  (swap! S update :mode-t + dt)
+  (case (:mode @S)
+    :play (do (update-play! dt) (update-fx! dt))
+    :clear (do (update-fx! dt)
+               (swap! S update :time + dt)
+               (when (< (rand) 0.25)
+                 (burst! (rnd 8 40) (rnd 8 30) (rand-nth (vals w/piece-colors)) 16 20.0))
+               (when (> (:mode-t @S) 2.8)
+                 (begin-level! (inc (:li @S)))))
+    :over (update-fx! dt)
+    :pause nil
+    :card nil
+    nil))
+
+(defn render! []
+  (let [sb (StringBuilder.)]
+    (if (= :card (:mode @S))
+      (draw-card! sb)
+      (do (draw-frame-border! sb)
+          (draw-arena! sb)
+          (let [sc @scr st (:stats sc)]
+            (swap! fps-stat (fn [[f _ _]] [f (aget st 0) (aget st 1)])))
+          (draw-panel! sb)))
+    (gfx/present! sb)))
+
+;; ---------------------------------------------------------------------------
+;; main loop
+
+(defn wire-world! []
+  (reset! w/on-change
+          (fn [tx ty]
+            (gfx/mark-world-rect! @scr (* 2.0 tx) (* 2.0 ty) (+ 1.999 (* 2.0 tx)) (+ 1.999 (* 2.0 ty))))))
+
+(defn main! [o]
+  (reset! opts o)
+  (let [[tc tr] (or (term/size) [100 30])]
+    (reset! scr (gfx/make-screen tc tr PANEL-W)))
+  (wire-world!)
+  (reset! S {:score 0 :lives 5 :mode :play :mode-t 0.0 :best 0})
+  (term/raw-mode!)
+  (term/alternate-screen)
+  (term/hide-cursor)
+  (term/write (str gfx/ESC "[?7l"))
+  (in/start!)
+  (try
+    (clear-screen!)
+    (if-let [li (:level o)]
+      (do (swap! S assoc :score 0 :lives 5)
+          (if (:skip-card o) (enter-level! li) (begin-level! li)))
+      (to-title!))
+    (let [fps (or (:fps o) 50)
+          frame-ns (/ 1e9 fps)
+          t-start (System/nanoTime)
+          stop-at (when-let [s (:seconds o)] (+ t-start (* s 1e9)))]
+      (loop [last (System/nanoTime)]
+        (let [t0 (System/nanoTime)
+              dt (min 0.05 (/ (- t0 last) 1e9))]
+          (doseq [e (in/poll!)] (handle-event! e))
+          (update! dt)
+          (render!)
+          (let [el (- (System/nanoTime) t0)]
+            (swap! fps-stat (fn [[_ c b]] [(/ 1e9 (max frame-ns (* 1.0 el))) c b]))
+            (let [ms (/ (- frame-ns el) 1e6)]
+              (when (> ms 1.0) (async/<!! (async/timeout (long ms))))))
+          (when-not (or @quit? (and stop-at (> (System/nanoTime) stop-at)))
+            (recur t0)))))
+    (finally
+      (in/stop!)
+      (term/write (str gfx/ESC "[0m" gfx/ESC "[?7h" gfx/ESC "[?2026l"))
+      (term/show-cursor)
+      (term/main-screen)
+      (term/restore-mode!))))

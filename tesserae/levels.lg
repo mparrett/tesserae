@@ -1,0 +1,285 @@
+(ns tesserae.levels
+  "Story, chapters and the ten v0 levels. A map is 24 strings of 24 chars, or a
+   generator fn (x y) -> char. Legend:
+     .  empty           ?  tetromino fill (breakable, packed per seed)
+     ,  ghost fill      IOTSZJL breakable piece / iotszjl ghost piece
+     H  hard (2 hits)   #  wall          +  mitosis   *  rubber   %  lead
+     @  lodestone       x  pit           $  lamp      B  ball / marble start")
+
+(def prologue
+  ["Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the sky's memory."
+   ""
+   "Then the Grout came. Grey, patient, hungry, it seeped between the tiles and set them hard as bone."
+   ""
+   "You are the last Lapidary. You carry a Trowel and a Spark."
+   ""
+   "Break what is dead. Set what is lost. Turn the sky."])
+
+(def epilogue
+  ["The last course falls."
+   ""
+   "The Mosaic turns once, freely, and the sky remembers its colours."
+   ""
+   "Somewhere below, a Lapidary sets down the Trowel."
+   ""
+   "For now."])
+
+;; ---------------------------------------------------------------------------
+;; map helpers
+
+(defn gen [f]
+  (vec (for [y (range 24)] (apply str (for [x (range 24)] (f x y))))))
+
+(defn- line-cells
+  "Bresenham cells between two tile points."
+  [[x0 y0] [x1 y1]]
+  (let [dx (math/abs (- x1 x0)) dy (- (math/abs (- y1 y0)))
+        sx (if (< x0 x1) 1 -1) sy (if (< y0 y1) 1 -1)]
+    (loop [x x0 y y0 err (+ dx dy) acc #{}]
+      (let [acc (conj acc [x y])]
+        (if (and (= x x1) (= y y1)) acc
+            (let [e2 (* 2 err)
+                  [x err] (if (>= e2 dy) [(+ x sx) (+ err dy)] [x err])
+                  [y err] (if (<= e2 dx) [(+ y sy) (+ err dx)] [y err])]
+              (recur x y err acc)))))))
+
+(defn- polyline [& pts]
+  (reduce into #{} (map line-cells pts (rest pts))))
+
+(defn- manhattan [x y] (+ (math/abs (- x 11.5)) (math/abs (- y 11.5))))
+(defn- dist [x y cx cy] (math/sqrt (+ (* (- x cx) (- x cx)) (* (- y cy) (- y cy)))))
+
+;; ---------------------------------------------------------------------------
+;; maps
+
+(def map-first-light
+  (gen (fn [x y] (if (and (<= 2 y 7) (<= 2 x 21)) \? \.))))
+
+(def map-mitosis
+  ["........................"
+   "..HHHHHHHHHHHHHHHHHHHH.."
+   "..H??????????????????H.."
+   "..H???+????????+?????H.."
+   "..H??????????????????H.."
+   "..H?????+??????+?????H.."
+   "..H??????????????????H.."
+   "..HHHHHHHH....HHHHHHHH.."
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................"])
+
+(def map-quarter-turn
+  (let [mito #{[11 6] [6 12] [17 11] [12 17]}]
+    (gen (fn [x y]
+           (let [d (manhattan x y)]
+             (cond (<= d 1) \#
+                   (contains? mito [x y]) \+
+                   (<= d 7) \?
+                   :else \.))))))
+
+(def map-twin
+  (gen (fn [x y]
+         (cond (and (= y 11) (<= 9 x 14)) \#
+               (contains? #{[5 10] [18 13]} [x y]) \+
+               (= [x y] [11 8]) \*
+               (and (<= 8 y 15) (<= 3 x 20)) \?
+               :else \.))))
+
+(def map-blueprint
+  (let [crown (polyline [3 12] [20 12] [20 4] [16 8] [12 3] [11 3] [7 8] [3 4] [3 12])
+        gems #{[7 15] [11 16] [12 16] [16 15]}]
+    (gen (fn [x y] (cond (contains? crown [x y]) \,
+                         (contains? gems [x y]) \,
+                         :else \.)))))
+
+(def map-grout
+  (let [ring (set (for [x (range 24) y (range 24)
+                        :let [d (dist x y 7 8)]
+                        :when (and (>= d 3.4) (< d 4.5))] [x y]))
+        shaft (polyline [12 8] [21 8])
+        teeth (polyline [17 9] [17 10])
+        teeth2 (polyline [20 9] [20 11])]
+    (gen (fn [x y] (if (or (ring [x y]) (shaft [x y]) (teeth [x y]) (teeth2 [x y])) \, \.)))))
+
+(def map-tilt
+  ["########################"
+   "#B.....#........x.....$#"
+   "#.....##........x......#"
+   "#..$.....###.......##..#"
+   "#........#.....$....#..#"
+   "###..x...#..........#..#"
+   "#........#...xx.....x..#"
+   "#..####..#..........#..#"
+   "#.....#.....#####......#"
+   "#.$...#.........#...$..#"
+   "#.....#..x......#......#"
+   "#..x..######....#...####"
+   "#..............x.......#"
+   "#####.....$............#"
+   "#.......####..###...x..#"
+   "#..x....#.......#......#"
+   "#.......#...$...#..$...#"
+   "#...$...#.......#......#"
+   "#.......###...###...x..#"
+   "#..##..........x.......#"
+   "#..##....x.........##..#"
+   "#...........$......##..#"
+   "#x.......x.......x....$#"
+   "########################"])
+
+(def map-marble-run
+  ["########################"
+   "#B........$..........B.#"
+   "#.??????.......??????..#"
+   "#.?....?..xx...?....?..#"
+   "#.?.$..?.......?..$.?..#"
+   "#.?....?...$...?....?..#"
+   "#.??..??.......??..??..#"
+   "#......................#"
+   "#..x.......B........x..#"
+   "#......................#"
+   "#...#####......#####...#"
+   "#...#..$#..xx..#$..#...#"
+   "#...#...#......#...#...#"
+   "#...##.##..$...##.##...#"
+   "#......................#"
+   "#.x..................x.#"
+   "#.......??????????.....#"
+   "#.......?..$..$..?.....#"
+   "#.......?........?.....#"
+   "#.......????..????.....#"
+   "#..$...............$...#"
+   "#....x.....xx.....x....#"
+   "#$....................$#"
+   "########################"])
+
+(def map-lodestone
+  ["........................"
+   "..????????????????????.."
+   "..????????????????????.."
+   "..??%?????????????*???.."
+   "..????????????????????.."
+   "........................"
+   ".....@..........@......."
+   "........................"
+   "...........@............"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"
+   "........................" "........................" "........................"])
+
+(def map-heart
+  (let [gaps #{[5 0] [17 0] [0 8] [23 15] [6 23] [16 23]}
+        mito #{[8 11] [15 12]}]
+    (gen (fn [x y]
+           (let [d (dist x y 11.5 11.5)
+                 border? (or (= x 0) (= y 0) (= x 23) (= y 23))]
+             (cond (gaps [x y]) \.
+                   border? \#
+                   (= [x y] [11 11]) \B
+                   (< d 1.6) \.
+                   (mito [x y]) \+
+                   (<= d 6.2) \?
+                   :else \.))))))
+
+(def map-title
+  ;; T E S S / E R A E in a 3x5 tile font, rows 3-7 and 10-14
+  (let [font {\T ["###" ".#." ".#." ".#." ".#."]
+              \E ["###" "#.." "##." "#.." "###"]
+              \S ["###" "#.." "###" "..#" "###"]
+              \R ["##." "#.#" "##." "#.#" "#.#"]
+              \A [".#." "#.#" "###" "#.#" "#.#"]}
+        colors "IOTSZJLI"
+        place (fn [word y0 ci]
+                (for [[n ch] (map-indexed vector word)
+                      [dy row] (map-indexed vector (font ch))
+                      [dx c] (map-indexed vector row)
+                      :when (= c \#)]
+                  [[(+ 3 (* n 5) dx) (+ y0 dy)] (nth colors (+ ci n))]))
+        cells (into {} (concat (place "TESS" 3 0) (place "ERAE" 10 4)))]
+    (gen (fn [x y] (get cells [x y] \.)))))
+
+;; ---------------------------------------------------------------------------
+;; themes
+
+(def themes
+  {:indigo {:bg0 0x0d0f24 :bg1 0x1a1240 :outside 0x05050c :accent 0x7f8cff}
+   :teal   {:bg0 0x062024 :bg1 0x0b3438 :outside 0x020b0c :accent 0x4fe0d0}
+   :umber  {:bg0 0x1e140c :bg1 0x2e1d10 :outside 0x0b0704 :accent 0xffc86a}
+   :felt   {:bg0 0x0b2a16 :bg1 0x0f3a1e :outside 0x041008 :accent 0x9bea7a}
+   :violet {:bg0 0x1a0b26 :bg1 0x2a1038 :outside 0x0a040e :accent 0xe070ff}
+   :crimson {:bg0 0x24080e :bg1 0x380c14 :outside 0x0e0305 :accent 0xff5a6e}})
+
+;; ---------------------------------------------------------------------------
+;; chapters & levels
+
+(def levels
+  [{:id "1.1" :name "First Light" :chapter "I · THE CHIPPING" :theme :indigo
+    :map map-first-light :goal :clear :speed 24.0
+    :card ["The outer courses are fouled."
+           ""
+           "Strike them loose. The Spark remembers their colours even when they forget."
+           ""
+           "Clear a whole piece, all four tesserae, and it sings."]}
+   {:id "1.2" :name "Mitosis" :chapter "I · THE CHIPPING" :theme :indigo
+    :map map-mitosis :goal :clear :speed 25.0
+    :card ["Some tiles are cells, still alive beneath the grout."
+           ""
+           "Touch one and the Spark divides."]}
+   {:id "2.1" :name "Quarter Turn" :chapter "II · THE TURNING" :theme :teal
+    :map map-quarter-turn :goal :clear :speed 24.0 :rotate 15.0
+    :card ["The Mosaic was never meant to hold still. It is a dial, and the Grout has jammed it."
+           ""
+           "Free it and the sky turns under your feet."
+           ""
+           "Your Trowel stays where you stand. The world does not."]}
+   {:id "2.2" :name "Twin Trowels" :chapter "II · THE TURNING" :theme :teal
+    :map map-twin :goal :clear :speed 22.0 :rotate 18.0 :twin true :balls 2
+    :card ["Two horizons. Two Trowels. One hand."
+           ""
+           "Both edges are open now. Both Trowels follow you."]}
+   {:id "3.1" :name "Blueprint" :chapter "III · THE SETTING" :theme :umber
+    :map map-blueprint :goal :build :speed 24.0
+    :card ["Breaking is half the craft."
+           ""
+           "The blueprints still glimmer where the old tiles were. Strike a ghost and it sets, true and gold-rimmed."
+           ""
+           "Build the crown whole."]}
+   {:id "3.2" :name "Grout Creep" :chapter "III · THE SETTING" :theme :umber
+    :map map-grout :goal :build :speed 25.0 :decay 7.0 :balls 2
+    :card ["The Grout fights back now, loosening what you set."
+           ""
+           "Finish the key faster than it forgets."]}
+   {:id "4.1" :name "Tilt Table" :chapter "IV · THE TILT" :theme :felt
+    :map map-tilt :goal :lamps :tilt true
+    :card ["Beneath the Mosaic lies the Orrery: a marble table of lamps and pits."
+           ""
+           "No Trowel here. Tilt the table and let gravity do the work."
+           ""
+           "Light every lamp. Mind the dark."]}
+   {:id "4.2" :name "Marble Run" :chapter "IV · THE TILT" :theme :felt
+    :map map-marble-run :goal :lamps :tilt true
+    :card ["Three marbles, one table."
+           ""
+           "The tesserae here are soft. Knock them loose to reach the lamps inside."]}
+   {:id "5.1" :name "Lodestone" :chapter "V · LODESTONE" :theme :violet
+    :map map-lodestone :goal :clear :speed 26.0 :gravity 9.0 :magnet true
+    :card ["Iron sleeps in the old foundation, and it pulls at the Spark."
+           ""
+           "So can you. SPACE wakes the Trowel's own lodestone: catch, aim, release."
+           ""
+           "Rubber bounds. Lead breaks through."]}
+   {:id "6.1" :name "The Heart" :chapter "VI · THE HEART" :theme :crimson
+    :map map-heart :goal :heart :speed 21.0 :ward true :boundary :open
+    :card ["At the centre the Grout has walled the Spark inside its own heart."
+           ""
+           "You have no Trowel, only the tile the Mosaic lends you, and it will not stay lent for long."
+           ""
+           "Guard the breaches. Let the Spark eat its way out."]}])
+
+(def title-level
+  {:id "--" :name "Attract" :chapter "" :theme :indigo :map map-title :goal :clear :speed 22.0})
