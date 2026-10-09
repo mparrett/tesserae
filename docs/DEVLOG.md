@@ -138,3 +138,27 @@ one conflict, in the ball draw call, and both sides were kept.
 - Sweep after tuning (240 s cap): 1.1 201 s, 1.2 154 s, 2.1 63 s, 2.2 89 s, 5.1 135 s, 6.1 114 s.
   Blueprint and Grout Creep end just short (7 and 10 left). The tilt levels can't be judged
   with the naive tilt bot.
+
+## 2026-10-09: v1 meta layer (progress, unlocks, medals, tally)
+
+- **decision: let-go `storage`.** String key/values, one file per key under
+  `~/.config/let-go/storage/<store>/`. Records are EDN (`pr-str`/`read-string`). `play.sh` pins
+  `-storage-id tesserae`, because without the flag a `main.lg` run keys its store by directory
+  name, and every worktree would get its own progress. Records are keyed by level id, not
+  index, so inserting a level keeps old saves. Every call is guarded; a failure drops to
+  in-memory progress.
+- **decision: medals from par.** Gold at or under par, silver up to 1.5× par, bronze
+  otherwise, with pars taken from the autopilot sweep. A clear without losing a spark or marble
+  adds +500 and a ✦. Autoplay never saves.
+- **surprise:** tally text drawn straight over tiles and fireworks was unreadable, because a
+  glyph's bg is the pixel beneath it. The tally now sits on one dark `rect!` plate, and the
+  fireworks keep to the edges.
+- **decision:** `game.lg` gets `meta-*` hooks plus one section. The logic lives in
+  `tesserae/meta.lg`, so it merges cleanly with level work and can be tested without a
+  terminal.
+- **opportunity:** let-go ships `clojure.test`. `./tools/test.sh` runs 143 assertions in about
+  1 s (input parsing including kitty CSI-u, packing determinism, map validity, storage round
+  trip).
+- **main session:** the tilt autopilot now follows a BFS path around walls and pits with a
+  velocity controller, so the sim can judge tilt levels (4.1 and 4.2 clear in about 38 s with
+  perfect knowledge; expect 1.5–2 min for a human).
