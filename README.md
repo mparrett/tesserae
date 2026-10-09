@@ -11,7 +11,7 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ## Play
 
 ```sh
-./play.sh                       # title screen; SPACE to begin, 1-0, - and = to jump to a level
+./play.sh                       # title screen; SPACE to begin, 1-0 - = [ ] \ to jump to a level
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
 ./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
@@ -19,6 +19,21 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ./play.sh --reset-progress      # forget saved scores, medals and unlocks
 LG=/path/to/lg ./play.sh        # use another let-go binary
 ```
+
+You need a truecolor terminal at least 76x24. 124x50 or larger doubles the raster. Kitty,
+Ghostty, WezTerm, foot and recent iTerm2 send real key-release events, so held keys feel
+exact there. Elsewhere a short-hold model rides the key repeat. Mouse movement steers the
+trowel in any terminal that reports motion.
+
+| keys | |
+|---|---|
+| ← → / A D / mouse | move the trowel |
+| SPACE / click | launch; magnet pulse on Lodestone; level the table on Tilt |
+| ← ↑ → ↓ | tilt the table (Tilt) / move your borrowed tile (Heart) |
+| ← → / ↑ ↓ / SPACE | Orrery: lean the table / level it / drop a marble from the hopper |
+| TAB | take another tile (Heart, costs 25) |
+| P | pause, R restart level, Q back to the menu, Ctrl-C quit |
+| ] / [ | debug: win the level / lose a spark |
 
 ### Progress, unlocks and medals
 
@@ -36,7 +51,7 @@ Each level has a par time. A clear at or under par earns gold (●), within 1.5�
 silver, otherwise bronze; a clear without losing a spark adds +500 and a ✦. The clear
 tally shows time against par, the medal, sets laid, the bonuses and new bests.
 
-## The twelve levels
+## The twelve levels, and a bonus chapter
 
 | | level | what's new |
 |---|---|---|
@@ -52,6 +67,9 @@ tally shows time against par, the medal, sets laid, the bonuses and new bests.
 | V · Lodestone | 5.1 Lodestone | Gravity, magnetic tiles that bend the Spark, a magnet trowel (catch / aim / release), rubber, lead and ghost balls (ghost slips through three tiles) |
 | VI · The Heart | 6.1 The Heart | The Spark starts walled in; no paddle; you steer one tile the game lends you, and it moves on every 8 s |
 | | 6.2 The Grout Core | Finale, after Yars' Revenge: a pulsing core (6 hits) behind a scrolling, self-mending shield; a rainbow neutral zone that spins the Spark; a homing Destroyer that stuns the trowel; a Swirl to dodge every 12 s |
+| VII · The Orrery | 7.1 Escapement | Bonus chapter, opened by clearing 6.2. Marble logic after Turing Tumble: SPACE drops a marble from the hopper, it waits in the escapement until you lean the table, and bits send each marble the way they lean, then flip. Fill the cups exactly |
+| | 7.2 Gearwork | Two bits on one axle flip together; a crossover lets a rolling marble pass over a falling one |
+| | 7.3 Counting House | A three-bit ripple counter: make it read 1 0 1 with three marbles |
 
 ## How it renders
 
@@ -180,20 +198,6 @@ press/repeat/release, BEL resize, Ctrl-C, mouse maps), tetromino packing determi
 level map validity (24×24, goal count > 0, a par per level), the meta layer (medals,
 unlocks, a storage round trip in the throwaway store `tesserae-test`) and custom map files
 (EDN round trip, validation, the shipped examples).
-
-You need a truecolor terminal at least 76x24. 124x50 or larger doubles the raster. Kitty,
-Ghostty, WezTerm, foot and recent iTerm2 send real key-release events, so held keys feel
-exact there. Elsewhere a short-hold model rides the key repeat. Mouse movement steers the
-trowel in any terminal that reports motion.
-
-| keys | |
-|---|---|
-| ← → / A D / mouse | move the trowel |
-| SPACE / click | launch; magnet pulse on Lodestone; level the table on Tilt |
-| ← ↑ → ↓ | tilt the table (Tilt) / move your borrowed tile (Heart) |
-| TAB | take another tile (Heart, costs 25) |
-| P | pause, R restart level, Q back to the menu, Ctrl-C quit |
-| ] / [ | debug: win the level / lose a spark |
 
 ## Layout
 

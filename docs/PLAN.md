@@ -47,7 +47,10 @@ renderer good enough to show off the rotation.
   `key-pending?` polling, which the loop already uses.
 - A level editor that writes the ASCII map format.
 - An Orrery mode in the spirit of Turing Tumble: marble logic gates built from tiles
-  (switch, crossover, bit) with puzzles solved by tilting.
+  (switch, crossover, bit) with puzzles solved by tilting. **Done (v2/orrery):** bonus
+  chapter VII · THE ORRERY (7.1 Escapement, 7.2 Gearwork, 7.3 Counting House), opened by
+  clearing 6.2. Next: more parts (an interrupt that stops the hopper, a trigger that
+  releases the next marble), a puzzle that needs both lanes and a gear, editor support.
 
 ## Performance notes
 

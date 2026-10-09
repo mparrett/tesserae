@@ -5,7 +5,11 @@
      ,  ghost fill      IOTSZJL breakable piece / iotszjl ghost piece
      H  hard (2 hits)   #  wall          +  mitosis   *  rubber   %  lead
      @  lodestone       x  pit           $  lamp      B  ball / marble start
-     =  grout shield    C  the Grout Core   ^  glass ball   ~  ghost ball")
+     =  grout shield    C  the Grout Core   ^  glass ball   ~  ghost ball
+   The Orrery (VII), marble logic parts:
+     V  hopper (SPACE drops a marble)   e  escapement (waits for the table to lean)
+     0 1  bit, sending marbles right (0) / left (1), flipping each pass
+     > <  fixed ramp    X  crossover    b r g  blue / red / gold cup")
 
 (def prologue
   ["Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the sky's memory."
@@ -15,6 +19,19 @@
    "You are the last Lapidary. You carry a Trowel and a Spark."
    ""
    "Break what is dead. Set what is lost. Turn the sky."])
+
+(def orrery-teaser
+  [""
+   "Far beneath, something brass begins to tick."
+   ""
+   "(A new chapter is open on the title screen: VII · THE ORRERY.)"])
+
+(def orrery-coda
+  ["The Orrery counts again."
+   ""
+   "One, and one, and one: the old arithmetic of the sky, carried in brass and glass."
+   ""
+   "Above, the Mosaic turns, and for the first time in an age it knows what hour it is."])
 
 (def epilogue
   ["The last course falls."
@@ -245,6 +262,108 @@
                :else \.))))
 
 ;; ---------------------------------------------------------------------------
+;; the Orrery (VII): marble logic. Every marble drops from the hopper V into the
+;; escapement e, which waits until the table leans left or right; it then rolls
+;; off that end of the shelf. Parts act on a marble whose centre enters them;
+;; rolling continues along any floor, and free marbles fall straight down.
+
+;; 7.1 Escapement. Left: the ramp sends the marble along a short rail into the
+;; blue cup. Right: the bit (starts 0, so right) alternates red, gold, red, gold.
+;; Goal blue 1, red 2, gold 2 with 5 marbles.
+;; Solution: right, right, right, right, left (the left one can come anywhere).
+(def map-orrery-escapement
+  ["########################"
+   "#.........#V#..........#"
+   "#......................#"
+   "#..........e...........#"
+   "#........#####.........#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#.............0........#"
+   "#.............#........#"
+   "#.......>..............#"
+   "#........##............#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#..........b.g.r.......#"
+   "########################"])
+
+;; 7.2 Gearwork. Two bits on one axle, A (left, starts 0) and B (right, starts 1):
+;; a marble through either flips both, so they always disagree.
+;;   A 0 -> right -> through the crossover -> blue      A 1 -> left -> red
+;;   B 0 -> right -> blue      B 1 -> left -> ramp, rail, across the crossover -> gold
+;; So on even marbles (0, 2, 4) left = blue, right = gold; on odd ones left = red,
+;; right = blue. Goal blue 3, red 1, gold 1 with 5 marbles.
+;; Solution: left, left, right, right, left (blue, red, gold, blue, blue).
+(def map-orrery-gearwork
+  ["########################"
+   "#.........#V#..........#"
+   "#......................#"
+   "#..........e...........#"
+   "#........#####.........#"
+   "#......................#"
+   "#......................#"
+   "#.......0.....1........#"
+   "#.......#.....#........#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#........X...<.........#"
+   "#.........####.........#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......rgb.....b.......#"
+   "########################"])
+
+;; 7.3 Counting House. A three-bit ripple counter, b2 b1 b0 on the staircase
+;; (b0 top right). A bit at 0 turns to 1 and sends the marble right, out to the
+;; gold tray; a bit at 1 turns to 0 and carries the marble left, down to the
+;; next bit (b2's carry falls into the pit). The right lane enters at b0 (+1);
+;; the left lane rides the ramp and rail into b1 (+2).
+;; Goal: the bits read 1 0 1 (five) with only 3 marbles, so two of them must
+;; count double. Solution: left, left, right (+2 +2 +1: 010, 100, 101).
+(def map-orrery-counting
+  ["########################"
+   "#.........#V#..........#"
+   "#......................#"
+   "#..........e...........#"
+   "#........#####.........#"
+   "#......................#"
+   "#.......>..............#"
+   "#........####..........#"
+   "#.............0........#"
+   "#.............#........#"
+   "#............0.........#"
+   "#............#.........#"
+   "#...........0..........#"
+   "#...........#..........#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#......................#"
+   "#..........x.ggg.......#"
+   "########################"])
+
+;; ---------------------------------------------------------------------------
 ;; themes
 
 (def themes
@@ -254,7 +373,8 @@
    :felt   {:bg0 0x0b2a16 :bg1 0x0f3a1e :outside 0x041008 :accent 0x9bea7a}
    :violet {:bg0 0x1a0b26 :bg1 0x2a1038 :outside 0x0a040e :accent 0xe070ff}
    :crimson {:bg0 0x24080e :bg1 0x380c14 :outside 0x0e0305 :accent 0xff5a6e}
-   :grout  {:bg0 0x121014 :bg1 0x1e1a1c :outside 0x060506 :accent 0xff8a3c}})
+   :grout  {:bg0 0x121014 :bg1 0x1e1a1c :outside 0x060506 :accent 0xff8a3c}
+   :orrery {:bg0 0x0a0f20 :bg1 0x141a2e :outside 0x04050b :accent 0xe8c070}})
 
 ;; ---------------------------------------------------------------------------
 ;; chapters & levels
@@ -345,7 +465,39 @@
            ""
            "Between you runs a seam of raw colour. The Spark comes through it changed."
            ""
-           "Break the Core."]}])
+           "Break the Core."]}
+   ;; VII · THE ORRERY: a bonus chapter, opened by clearing 6.2 (it unlocks in
+   ;; list order like every level, but the run after 6.2 goes to the epilogue).
+   ;; :orrery {:marbles n :fall g :cups {letter n} | :register [[x y] ..] :target "101"
+   ;;          :gears [[[x y] [x y]] ..] :solution [-1 1 ..]}  (lean per marble, for --autoplay)
+   {:id "7.1" :name "Escapement" :chapter "VII · THE ORRERY" :theme :orrery :par 45 :bonus true
+    :map map-orrery-escapement :goal :orrery :tilt true
+    :orrery {:marbles 5 :fall 30.0 :cups {\b 1 \r 2 \g 2} :solution [1 1 1 1 -1]}
+    :card ["Beneath the Heart, beneath even the tilt tables, the Orrery still stands: the brass machine that once computed the sky."
+           ""
+           "The Grout never reached it. It simply forgot how to count."
+           ""
+           "SPACE drops a marble from the hopper. It waits in the escapement until you lean the table, left or right."
+           ""
+           "A bit sends each marble the way it leans, then flips. Fill the cups exactly."]}
+   {:id "7.2" :name "Gearwork" :chapter "VII · THE ORRERY" :theme :orrery :par 60 :bonus true
+    :map map-orrery-gearwork :goal :orrery :tilt true
+    :orrery {:marbles 5 :fall 30.0 :cups {\b 3 \r 1 \g 1} :gears [[[8 7] [14 7]]]
+             :solution [-1 -1 1 1 -1]}
+    :card ["Two bits share an axle. Turn one and the other turns with it, so they never agree."
+           ""
+           "The crossover lets a rolling marble pass straight over a falling one."
+           ""
+           "Read the bits before you lean."]}
+   {:id "7.3" :name "Counting House" :chapter "VII · THE ORRERY" :theme :orrery :par 60 :bonus true
+    :map map-orrery-counting :goal :orrery :tilt true
+    :orrery {:marbles 3 :fall 30.0 :register [[12 12] [13 10] [14 8]] :target "101"
+             :solution [-1 -1 1]}
+    :card ["Here the Orrery kept its count: three bits on a staircase, each one carrying into the next."
+           ""
+           "It must read five, 1 0 1, and the hopper holds only three marbles."
+           ""
+           "Not every lane counts the same."]}])
 
 (def title-level
   {:id "--" :name "Attract" :chapter "" :theme :indigo :map map-title :goal :clear :speed 26.4})

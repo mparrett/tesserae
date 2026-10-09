@@ -45,6 +45,10 @@
 (declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?
          meta-clear-tick! meta-clear-key! meta-overlay! meta-title-panel! meta-hud! meta-controls-row)
 
+;; the orrery (VII) hooks (defined in the two "orrery" sections)
+(declare orrery-step orrery-init! update-orrery! orrery-tilt! orrery-release! orrery-level!
+         orrery-lost! orrery-fell! orrery-goal-left draw-orrery! draw-orrery-panel! orrery-status)
+
 ;; ---------------------------------------------------------------------------
 ;; custom maps (v2/editor): a level outside L/levels, played at index CUSTOM-LI.
 ;; tesserae/editor.lg (play-test) and main.lg --map set these; a custom run
@@ -363,8 +367,10 @@
 (defn step-ball
   "One physics step. Returns the ball (maybe with :fx) or nil when lost."
   [b dt open]
-  (if (:stuck b)
-    b
+  (cond
+    (:stuck b) b
+    (lv :orrery) (orrery-step b dt)                ; the Orrery moves its own marbles
+    :else
     (let [[ax ay] (forces b)
           b (assoc b :vx (+ (:vx b) (* ax dt)) :vy (+ (:vy b) (* ay dt)))
           b (if (lv :tilt)
@@ -465,6 +471,7 @@
             :heart (w/count-where w/breakable?)
             :core (max 0 (:core-hp @S 0))
             :lines (max 0 (- (get-in (lvl) [:well :lines] 6) (get-in @S [:well :lines] 0)))
+            :orrery (orrery-goal-left)
             0)]
     (swap! S assoc :goal-left n :goal-dirty false
            ;; the last tesserae sing: few goal tiles left -> they call the Spark
@@ -507,6 +514,7 @@
             :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
     (when (:core l) (boss-init! l))
     (when (:well l) (well-init!))
+    (when (:orrery l) (orrery-init! l))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
     (spawn-balls!)
@@ -1106,6 +1114,281 @@
   [x]
   (if (< x 24.0) [72 1] [95 22]))
 
+;; ---------------------------------------------------------------------------
+;; the orrery (VII), part 1: marble logic. Level key (on a :tilt level, so the
+;; tilt table's walls, marbles and lit border come free):
+;;   :orrery {:marbles n :fall g :cups {\b n ..} | :register [[x y] ..] :target "101"
+;;            :gears [[[x y] [x y]] ..] :solution [lean ..]}
+;; Marbles here move three ways. Falling: gravity :fall, horizontal drag, no
+;; sideways tilt, ordinary tile collisions. Guided: a part moves the marble to
+;; the next tile centre at GUIDE-V, and on arrival it keeps rolling while there
+;; is floor below. Held: the escapement keeps it until the table leans past
+;; LEAN. Parts (w/BIT..w/CUP) act when a marble's centre enters them. One
+;; marble at a time. A goal that can no longer be met (hopper empty, or a cup
+;; overfull) unwinds the machine: bits and cups reset, -150. State: S :orr.
+
+(def GUIDE-V 15.0)
+(def LEAN 0.3)
+(def LEAN-MAX 0.6)
+(def GEAR-RIM 0xd0703a)
+(def cup-name {\b "BLUE" \r "RED" \g "GOLD"})
+
+(defn ocfg [] (lv :orrery))
+(defn orr-part? [t] (and (>= t w/BIT) (<= t w/CUP)))
+(defn tidx [x y] (+ x (* y w/G)))
+
+(defn bit-put!
+  "Set bit i to state s through w/put! (so the render cache updates)."
+  [i s]
+  (aset w/tkind i s)
+  (w/put! i w/BIT (w/bit-colour s))
+  (when (get-in @S [:orr :gear-of i])
+    (aset w/thl i GEAR-RIM)
+    (w/changed! i)))
+
+(defn flip-bit!
+  "A marble passed bit i: it flips, and so does every bit on its axle."
+  [i]
+  (doseq [j (get-in @S [:orr :gear-of i] [i])]
+    (bit-put! j (- 1 (aget w/tkind j)))
+    (swap! S assoc-in [:orr :flash j] 0.35)))
+
+(defn guide-to
+  "Roll marble b to the centre of tile (x, y), direction d (+1/-1), unless
+   that tile is solid (then it just drops where it is)."
+  [b x y d]
+  (if (w/solid-type? (w/tile-at x y))
+    (assoc b :guide nil :hold nil :vx 0.0 :vy 1.0)
+    (let [[cx cy] (w/tile-center (tidx x y))]
+      (assoc b :guide [cx cy d] :hold nil :vx (* d GUIDE-V) :vy 0.0))))
+
+(defn orr-act
+  "Marble b's centre entered part i, rolling in direction d (0 = falling in)."
+  [b i d]
+  (let [t (aget w/tt i) x (mod i w/G) y (quot i w/G) k (aget w/tkind i)
+        b (assoc b :otile i)]
+    (cond
+      (= t w/BIT) (let [dir (if (zero? k) 1 -1)] (flip-bit! i) (guide-to b (+ x dir) y dir))
+      (= t w/RAMP) (let [dir (if (zero? k) 1 -1)] (guide-to b (+ x dir) y dir))
+      (= t w/CROSS) (if (zero? d) b (guide-to b (+ x d) y d))
+      (= t w/ESCAPE) (let [[cx cy] (w/tile-center i)]
+                       (assoc b :hold i :guide nil :x cx :y cy :vx 0.0 :vy 0.0))
+      (= t w/CUP) (assoc b :lost :cup :cup k)
+      (= t w/PIT) (assoc b :lost :pit)
+      :else b)))
+
+(defn orr-arrive
+  "A guided marble reached the centre of tile i, moving in direction d."
+  [b i d]
+  (let [t (aget w/tt i) x (mod i w/G) y (quot i w/G)]
+    (cond
+      (or (orr-part? t) (= t w/PIT)) (orr-act b i d)
+      (and (not (zero? d)) (w/solid-type? (w/tile-at x (inc y)))
+           (not (w/solid-type? (w/tile-at (+ x d) y))))
+      (guide-to (assoc b :otile i) (+ x d) y d)
+      :else (assoc b :guide nil :otile i :vx 0.0 :vy 2.0))))
+
+(defn- orr-guided [b dt]
+  (let [[tx ty d] (:guide b)
+        dx (- tx (:x b)) dy (- ty (:y b)) dist (len dx dy) s (* GUIDE-V dt)]
+    (if (<= dist s)
+      (orr-arrive (assoc b :x tx :y ty :guide nil) (tidx (int (* 0.5 tx)) (int (* 0.5 ty))) d)
+      (assoc b :x (+ (:x b) (* s (/ dx dist))) :y (+ (:y b) (* s (/ dy dist)))))))
+
+(defn- orr-fall [b dt]
+  (let [g (:fall (ocfg) 30.0)
+        f (max 0.0 (- 1.0 (* 8.0 dt)))
+        b (assoc b :vx (* f (:vx b)) :vy (min 36.0 (+ (:vy b) (* g dt))))
+        b (-> b (axis-move 0 dt) (axis-move 1 dt) (walls #{}))
+        i (tidx (int (math/floor (* 0.5 (:x b)))) (int (math/floor (* 0.5 (:y b)))))
+        t (aget w/tt i)]
+    (cond (= i (:otile b)) b
+          (or (orr-part? t) (= t w/PIT)) (orr-act b i 0)
+          :else (assoc b :otile i))))
+
+(defn- orr-held [b]
+  (let [a (first (:tilt @S)) i (:hold b)]
+    (if (>= (math/abs a) LEAN)
+      (let [d (if (pos? a) 1 -1)]
+        (guide-to b (+ (mod i w/G) d) (quot i w/G) d))
+      b)))
+
+(defn orrery-step
+  "step-ball for Orrery marbles."
+  [b dt]
+  (cond (:hold b) (orr-held b)
+        (:guide b) (orr-guided b dt)
+        :else (orr-fall b dt)))
+
+(defn orr-trace
+  "Every tile a marble can reach from the hopper: a discrete walk of the rules
+   above, taking both ways at bits and the escapement."
+  [start]
+  (loop [stack [[start 0]] seen #{} n 0]
+    (if (or (empty? stack) (> n 4000)) (set (map first seen))
+        (let [[i m :as s] (peek stack) stack (pop stack)
+              x (mod i w/G) y (quot i w/G) t (w/tile-at x y)]
+          (if (or (contains? seen s) (< t 0) (w/solid-type? t))
+            (recur stack seen (inc n))
+            (let [k (aget w/tkind i)
+                  go (fn [dx dy d] [(tidx (+ x dx) (+ y dy)) d])
+                  below? (w/solid-type? (w/tile-at x (inc y)))
+                  nxt (cond
+                        (= t w/BIT) [(go 1 0 1) (go -1 0 -1)]
+                        (= t w/ESCAPE) [(go 1 0 1) (go -1 0 -1)]
+                        (= t w/RAMP) (if (zero? k) [(go 1 0 1)] [(go -1 0 -1)])
+                        (= t w/CROSS) (if (zero? m) [(go 0 1 0)] [(go m 0 m)])
+                        (or (= t w/CUP) (= t w/PIT)) []
+                        (and (not (zero? m)) below?) (if (w/solid-type? (w/tile-at (+ x m) y)) [] [(go m 0 m)])
+                        below? []
+                        :else [(go 0 1 0)])]
+              (recur (into stack nxt) (conj seen s) (inc n))))))))
+
+(defn orr-grooves!
+  "Tint the background along every path a marble can take, so the eye can
+   follow the machine."
+  [start]
+  (let [acc (:accent (theme))]
+    (doseq [i (orr-trace start)]
+      (when (= w/EMPTY (aget w/tt i))
+        (aset w/bgc i (gfx/mix (aget w/bgc i) acc 0.09))))))
+
+(defn orr-gear-axles!
+  "Tint the tiles between geared bits on one row: a copper axle."
+  [groups]
+  (doseq [grp groups [[x0 y0] [x1 y1]] (map vector grp (rest grp))]
+    (when (= y0 y1)
+      (doseq [x (range (inc (min x0 x1)) (max x0 x1))]
+        (let [i (tidx x y0)]
+          (aset w/bgc i (gfx/mix (aget w/bgc i) GEAR-RIM 0.22)))))))
+
+(defn orr-unmet
+  "How far the machine is from the goal: cup counts off target, plus bits that
+   read wrong."
+  []
+  (let [o (:orr @S) c (ocfg)]
+    (+ (reduce + (map (fn [[k n]] (let [d (- n (get-in o [:cups (int k)] 0))] (if (neg? d) (- d) d)))
+                      (:cups c)))
+       (count (remove true? (map (fn [[x y] ch] (= (aget w/tkind (tidx x y)) (if (= ch \1) 1 0)))
+                                 (:register c) (:target c)))))))
+
+(defn orr-overfull? []
+  (let [o (:orr @S)]
+    (some (fn [[k n]] (> (get-in o [:cups (int k)] 0) n)) (:cups (ocfg)))))
+
+(defn orrery-goal-left []
+  (let [n (orr-unmet)] (if (and (zero? n) (seq (:balls @S))) 1 n)))
+
+(defn orr-goal-text []
+  (let [c (ocfg)]
+    (if (:target c)
+      (str "SET THE BITS TO " (str/join " " (map str (:target c))))
+      (str "FILL " (str/join " · " (for [k [\b \r \g] :let [n (get (:cups c) k)] :when n]
+                                    (str n " " (cup-name k))))))))
+
+(defn orrery-init! [l]
+  (let [c (:orrery l)
+        hop (or (first (w/indices-where #(= % w/HOPPER))) (tidx 11 1))
+        gear-of (into {} (for [grp (:gears c)
+                               :let [is (mapv (fn [[x y]] (tidx x y)) grp)]
+                               i is]
+                           [i is]))
+        bits (w/indices-where #(= % w/BIT))
+        cups (w/indices-where #(= % w/CUP))
+        cup-pos (into {} (for [[k is] (group-by (fn [i] (aget w/tkind i)) cups)]
+                           [k (mapv w/tile-center is)]))]
+    (swap! S assoc :tilt [0.0 0.75]
+           :orr {:supply (:marbles c 5) :max (:marbles c 5) :released 0
+                 :hopper hop :spawn (w/tile-center (+ hop w/G))
+                 :escape (first (w/indices-where #(= % w/ESCAPE)))
+                 :cups {} :cup-pos cup-pos :gear-of gear-of
+                 :bits0 (into {} (for [i bits] [i (aget w/tkind i)]))
+                 :flash {} :reset-t nil :bot-t 1.2})
+    (doseq [i (keys gear-of)] (bit-put! i (aget w/tkind i)))
+    (orr-grooves! (+ hop w/G))
+    (orr-gear-axles! (:gears c))
+    (banner! (orr-goal-text) 0xe8c070 2.5)))
+
+(defn orrery-release!
+  "SPACE: drop the next marble from the hopper."
+  []
+  (let [o (:orr @S)]
+    (cond
+      (:reset-t o) nil
+      (seq (:balls @S)) (banner! "ONE MARBLE AT A TIME" 0xc8d0e8 0.9)
+      (<= (:supply o) 0) (banner! "THE HOPPER IS EMPTY" 0xc8d0e8 0.9)
+      :else (let [[x y] (:spawn o)]
+              (swap! S assoc :balls [(assoc (new-ball x y 0.0 1.0 :marble) :otile -1)])
+              (swap! S update :orr (fn [o] (assoc o :supply (dec (:supply o)) :released (inc (:released o)))))
+              (burst! x (- y 1.0) 0xe8c070 6 6.0)))))
+
+(defn orrery-fell! []
+  (swap! S update :lost inc)                       ; meta: no "unbroken" bonus
+  (add-score! -150)
+  (banner! "MARBLE LOST  -150" 0xff7080 1.4))
+
+(defn orrery-lost!
+  "A marble left play: into a cup (counted) or a pit (-150)."
+  [b]
+  (if (= :cup (:lost b))
+    (let [k (:cup b) c (get w/cup-colour (char k) 0xffffff)
+          n (inc (get-in @S [:orr :cups k] 0))]
+      (swap! S assoc-in [:orr :cups k] n)
+      (burst! (:x b) (:y b) c 16 14.0)
+      (float-text! (:x b) (- (:y b) 2.5) (str "+" n) c)
+      (add-score! 25))
+    (do (burst! (:x b) (:y b) 0xff5050 18 18.0)
+        (float-text! (:x b) (:y b) "FELL" 0xff7080)
+        (orrery-fell!)))
+  (swap! S assoc :goal-dirty true))
+
+(defn orrery-reset!
+  "Unwind the machine: bits back to their start, cups emptied, hopper refilled."
+  []
+  (let [o (:orr @S)]
+    (doseq [[i s] (:bits0 o)]
+      (when (not= s (aget w/tkind i)) (bit-put! i s)))
+    (swap! S update :orr assoc :supply (:max o) :released 0 :cups {} :reset-t nil :flash {})
+    (swap! S assoc :balls [] :goal-dirty true)
+    (orrery-fell!)
+    (banner! "THE ORRERY UNWINDS  -150" 0xff9a70 1.6)))
+
+(defn orrery-tilt!
+  "update-tilt! on the Orrery: only the sideways lean is yours; the table
+   stays tipped toward you (the marbles' gravity)."
+  [dt]
+  (when-not (:autoplay @opts)
+    (let [ax (in/axis [:left :a :h] [:right :d :l])
+          [tx ty] (:tilt @S)]
+      (swap! S assoc :tilt [(clampf (+ tx (* ax 2.5 dt)) (- LEAN-MAX) LEAN-MAX) ty]))))
+
+(defn orrery-level! [] (swap! S assoc-in [:tilt 0] 0.0))
+
+(defn- orrery-bot!
+  "--autoplay: play the level's :solution, one lean per marble."
+  [dt]
+  (let [o (:orr @S) t (- (:bot-t o) dt)]
+    (cond
+      (or (seq (:balls @S)) (:reset-t o) (<= (:supply o) 0)) (swap! S assoc-in [:orr :bot-t] 0.6)
+      (> t 0.0) (swap! S assoc-in [:orr :bot-t] t)
+      :else (let [lean (get (:solution (ocfg)) (:released o) 1)]
+              (swap! S assoc-in [:tilt 0] (* LEAN-MAX lean))
+              (orrery-release!)))))
+
+(defn update-orrery! [dt]
+  (swap! S update-in [:orr :flash]
+         (fn [m] (into {} (keep (fn [[i t]] (when (> t dt) [i (- t dt)])) m))))
+  (let [o (:orr @S)]
+    (cond
+      (:reset-t o) (let [t (- (:reset-t o) dt)]
+                     (if (<= t 0.0) (orrery-reset!) (swap! S assoc-in [:orr :reset-t] t)))
+      (and (empty? (:balls @S)) (pos? (orr-unmet)) (or (<= (:supply o) 0) (orr-overfull?)))
+      (do (swap! S assoc-in [:orr :reset-t] 1.4)
+          (banner! (if (orr-overfull?) "OVERFULL · THE ORRERY STALLS" "OUT OF MARBLES") 0xff9a70 1.4))
+      :else nil))
+  (when (:autoplay @opts) (orrery-bot! dt))
+  (swap! S assoc :goal-dirty true))
+
 (defn update-paddle! [dt]
   (let [p (:paddle @S)
         hw (* 0.5 PADDLE-W)
@@ -1171,6 +1454,8 @@
       [0.0 0.0])))
 
 (defn update-tilt! [dt]
+  (if (lv :orrery)
+    (orrery-tilt! dt)
   (let [ax (in/axis [:left :a :h] [:right :d :l])
         ay (in/axis [:up :w :k] [:down :s :j])
         [tx ty] (:tilt @S)
@@ -1179,13 +1464,16 @@
       (swap! S assoc :tilt (tilt-bot b))
       (let [rate (* 2.5 dt)
             mv (fn [cur a] (clampf (+ cur (* a rate)) -1.0 1.0))]
-        (swap! S assoc :tilt [(mv tx ax) (mv ty ay)])))))
+        (swap! S assoc :tilt [(mv tx ax) (mv ty ay)]))))))
 
 (defn lose-ball! [b]
   (let [[sx sy] (gfx/w->s @scr (:x b) (:y b))]
     (burst! (clampf (:x b) 1.0 47.0) (clampf (:y b) 1.0 47.0) 0xff5050 18 18.0)))
 
 (defn life-lost! []
+  (if (lv :orrery)
+    (orrery-fell!)                                 ; the Orrery costs points, never sparks
+  (do
   (swap! S update :lost inc)                       ; meta: no "unbroken" bonus
   (if (lv :tilt)
     (do (add-score! -150)
@@ -1201,7 +1489,7 @@
           (if (lv :tilt)
             (swap! S assoc :tilt [0.0 0.0] :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
                                              0.0 0.0 :marble)])
-            (spawn-balls!)))))))
+            (spawn-balls!)))))))))
 
 (defn level-won! []
   (let [secs (:time @S)
@@ -1210,7 +1498,8 @@
     (release-ward!)
     (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus
            :dest nil :swirl nil :swirl-warn nil :stun 0.0)
-    (banner! (if (lv :core) "THE CORE IS BROKEN" "MOSAIC RESTORED") 0xfff2a0 3.0)
+    (banner! (cond (lv :core) "THE CORE IS BROKEN" (lv :orrery) "THE ORRERY COUNTS" :else "MOSAIC RESTORED")
+             0xfff2a0 3.0)
     (meta-won!)))
 
 (defn step-world! [dt]
@@ -1225,10 +1514,13 @@
             lost (filter :lost stepped)
             live (vec (remove :lost stepped))
             live (if (> (count live) 14) (subvec live 0 14) live)]
-        (doseq [b lost] (lose-ball! b)
-          (when (= :pit (:lost b)) (float-text! (:x b) (:y b) "FELL" 0xff7080)))
+        (doseq [b lost]
+          (if (lv :orrery)
+            (orrery-lost! b)
+            (do (lose-ball! b)
+                (when (= :pit (:lost b)) (float-text! (:x b) (:y b) "FELL" 0xff7080)))))
         (swap! S assoc :balls live)))
-    (when (and (empty? (:balls @S)) (not= :over (:mode @S)))
+    (when (and (empty? (:balls @S)) (not= :over (:mode @S)) (not (lv :orrery)))
       (if (neg? (:li @S)) (spawn-balls!) (life-lost!)))))
 
 (defn update-balls-frame! [dt]
@@ -1312,6 +1604,7 @@
   (update-balls-frame! dt)
   (when (lv :core) (update-boss! dt))
   (when (lv :well) (update-well! dt))
+  (when (lv :orrery) (update-orrery! dt))
   (step-world! dt)
   (when (:goal-dirty @S) (recount-goal!))
   (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
@@ -1391,6 +1684,7 @@
       (let [[x y] (w/tile-center (:ward st))]
         (gfx/glow! sc x y 4.5 0.0 0xffe0e8 (+ 0.35 (* 0.2 (math/sin (* 7.0 t)))))))
     (when (and (lv :core) (= :play (:mode st))) (draw-boss! sc st t))
+    (when (and (lv :orrery) (= :play (:mode st))) (draw-orrery! sc st t))
     ;; particles
     (doseq [p (:parts st)]
       (gfx/glow! sc (:x p) (:y p) 1.1 0.35 (:c p) (/ (:life p) (:max p))))
@@ -1437,14 +1731,15 @@
       (gfx/fg! sb c)
       (.append sb s))))
 
-(def level-keys "1234567890-=")
+(def level-keys "1234567890-=[]\\")   ; the number row, then [ ] \ for the Orrery
 (defn level-key-label [j] (if (< j (count level-keys)) (subs level-keys j (inc j)) " "))
 
 (defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
 
 (defn controls []
   (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0 - =  jump to level" "Q      quit"]
+    (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
+    (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" "P pause  Q menu"]
     (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
     (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
     (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
@@ -1471,7 +1766,7 @@
         title? (neg? (:li st))
         r (fn [i] (+ top i))
         goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
-                    :core "core hits" :lines "lines to go" "")
+                    :core "core hits" :lines "lines to go" :orrery "to go" "")
         [fps cells bytes] @fps-stat]
     (panel-line! sb (r 0) "T E S S E R A E" acc)
     (panel-line! sb (r 1) "──────────────────────" 0x404660)
@@ -1499,6 +1794,7 @@
                              (:decay l) (str "grout creeps " (int (math/ceil (:decay-t st))) "s")
                              (:well l) (if (get-in st [:well :flash]) "COURSE LAID" "side shoves · below turns")
                              (:magnet l) (if (pos? (:mag-cd st)) "magnet charging" "magnet READY")
+                             (:orrery l) (orrery-status)
                              (:tilt l) (let [[a c] (:tilt st)] (format "tilt %+.1f %+.1f" a c))
                              :else "")
                        (cond (and (:rotate l) (< (:rot-timer st) 3.0)) 0xffe070
@@ -1508,7 +1804,8 @@
                              (and (:swirl l) (< (:swirl-t st 99.0) 3.0)) 0xffa060
                              :else acc))
           (meta-hud! sb r)
-          (when (:well l) (draw-well-panel! sb r))))
+          (when (:well l) (draw-well-panel! sb r))
+          (when (:orrery l) (draw-orrery-panel! sb r))))
     (let [cs (controls)]
       (doseq [[j s] (map-indexed vector cs)]
         (panel-line! sb (r (+ (meta-controls-row) j)) s 0x8890a8)))
@@ -1612,12 +1909,24 @@
     (custom-li? li) (to-title!)                       ; after a custom clear
     (>= li (count L/levels))
     (do (meta-epilogue!)
-        (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title]))
+        (if (:bonus (last L/levels))
+          (show-card! "CODA" L/orrery-coda 0xe8c070 [:title])     ; after the Orrery
+          (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title])))
     :else
     (let [l (nth L/levels li)]
       (load-level! li)
       (show-card! (str (:chapter l) "  ·  " (:name l)) (:card l)
                   (:accent (get L/themes (:theme l))) [:level li]))))
+
+(defn next-level!
+  "After a clear: the next level, except that the last main level ends the
+   story (epilogue, then the title, where the bonus chapter is now open)."
+  [li]
+  (let [n (inc li)]
+    (if (and (< n (count L/levels)) (:bonus (nth L/levels n)) (not (:bonus (nth L/levels li))))
+      (do (meta-epilogue!)
+          (show-card! "EPILOGUE" (into L/epilogue L/orrery-teaser) 0xfff2a0 [:title]))
+      (begin-level! n))))
 
 (defn to-title! []
   (if (and (custom?) @on-custom-exit)
@@ -1675,9 +1984,11 @@
         (= k (keyword "[")) (life-lost!)                ; debug: lose a spark
         (contains? #{:space :click} k)
         (cond (some :stuck (:balls st)) (launch!)
+              (lv :orrery) (when (= ev :press) (orrery-release!))
               (lv :tilt) (swap! S assoc :tilt [0.0 0.0])
               (and (lv :magnet) (zero? (:mag-cd st))) (swap! S assoc :mag-t 1.4 :mag-cd 3.5)
               :else nil)
+        (and (lv :orrery) (contains? #{:up :down :w :s :k :j} k)) (orrery-level!)
         (and (lv :ward) (= k :tab)) (do (add-score! -25) (choose-ward!))
         (lv :ward) (case k
                      (:left :a :h) (move-ward! -1 0)
@@ -1772,7 +2083,7 @@
           [wx wy] (gfx/s->w sc sx sy)]
       (burst! wx wy (rand-nth (vals w/piece-colors)) 16 20.0)))
   (when (> (:mode-t @S) TALLY-AUTO)
-    (begin-level! (inc (:li @S)))))
+    (next-level! (:li @S))))
 
 (defn meta-clear-key! [k ev]
   (when (= ev :press)
@@ -1781,7 +2092,7 @@
       (let [t (:mode-t @S)]
         (cond (< t 0.3) nil                                   ; a launch press still in flight
               (< t tally-done) (swap! S assoc :mode-t tally-done)
-              :else (begin-level! (inc (:li @S)))))
+              :else (next-level! (:li @S))))
       (contains? #{:q :esc} k) (to-title!)
       :else nil)))
 
@@ -1897,7 +2208,7 @@
                         [(if (:flawless rec) "✦" " ") 0x9bea7a]
                         [(str " " (:id l) " " (:name l)) 0xb0b8d0]]
                        [[(str (level-key-label j) " ") 0x3a4058] ["⊘" 0x5a4a50]
-                        [(str "  " (:id l) " " (:name l)) 0x3a4058]]))))
+                        [(str "  " (:id l) " " (if (:bonus l) "· · ·" (:name l))) 0x3a4058]]))))
     (panel-segs! sb (r (+ 4 n)) [["best  " 0x808aa0] [(str (M/best)) 0xfff2c0]])
     (let [mc (M/medal-counts)]
       (panel-segs! sb (r (+ 5 n))
@@ -1921,6 +2232,79 @@
                    (if rec
                      [["best    " 0x808aa0] [g gc] [(str " " (:score rec) " · " (fmt-time (:time rec))) 0x808aa0]]
                      [["best    —" 0x505870]])))))
+
+;; ---------------------------------------------------------------------------
+;; the orrery (VII), part 2: drawing (arena glows and counts, the HUD rows)
+
+(defn orrery-status
+  "HUD row 10: which way the table leans."
+  []
+  (let [a (first (:tilt @S))]
+    (cond (:reset-t (:orr @S)) "the Orrery unwinds…"
+          (<= a (- LEAN)) "◀ leaning left"
+          (>= a LEAN) "leaning right ▶"
+          :else "table level")))
+
+(defn draw-orrery! [sc st t]
+  (let [o (:orr st) a (first (:tilt st)) bs (:balls st)]
+    ;; the escapement: glows while it holds a marble, and shows the lean
+    (when-let [e (:escape o)]
+      (let [[cx cy] (w/tile-center e)
+            held? (some :hold bs)]
+        (when held?
+          (gfx/glow! sc cx cy 3.2 0.0 0x4fe0d0 (+ 0.3 (* 0.2 (math/sin (* 8.0 t))))))
+        (when (>= (math/abs a) LEAN)
+          (gfx/glow! sc (+ cx (* (if (pos? a) 2.2 -2.2) 1.0)) cy 1.3 0.2 0x4fe0d0 0.7))))
+    ;; the hopper is ready
+    (when (and (empty? bs) (pos? (:supply o)) (not (:reset-t o)))
+      (let [[x y] (:spawn o)]
+        (gfx/glow! sc x (- y 1.6) 2.6 0.0 0xe8c070 (+ 0.2 (* 0.15 (math/sin (* 4.0 t)))))))
+    ;; a bit that just flipped
+    (doseq [[i ft] (:flash o)]
+      (let [[cx cy] (w/tile-center i)]
+        (gfx/glow! sc cx cy 3.0 0.0 (w/bit-colour (aget w/tkind i)) (* 2.0 ft))))
+    ;; cup counts, have/want, above each cup
+    (doseq [[k n] (:cups (lv :orrery))]
+      (doseq [[x y] (get (:cup-pos o) (int k))]
+        (let [have (get (:cups o) (int k) 0)]
+          (gfx/world-text! sc x (- y 2.6) (str have "/" n)
+                           (cond (= have n) 0x9bea7a (> have n) 0xff6060
+                                 :else (get w/cup-colour k 0xc8d0e8))))))
+    (when (and (empty? bs) (= (:supply o) (:max o)) (< (:time st) 12.0))
+      (ctext! sc (+ (quot (:rows sc) 2) 4) " SPACE · drop a marble " 0xa0a8c0))))
+
+(defn- bit-digits
+  "Panel segments for a row of bits, each in its bit colour."
+  [ss]
+  (vec (mapcat (fn [s] [[(str s " ") (w/bit-colour s)]]) ss)))
+
+(defn draw-orrery-panel!
+  "HUD rows 13-17: the hopper, then cups (have / want) or bits vs target."
+  [^StringBuilder sb r]
+  (let [st @S o (:orr st) c (lv :orrery)]
+    (panel-segs! sb (r 13) [["HOPPER  " 0x808aa0]
+                            [(pips (:supply o) (:max o)) 0xe8c070]])
+    (if (:target c)
+      (let [now (mapv (fn [[x y]] (aget w/tkind (tidx x y))) (:register c))
+            want (mapv (fn [ch] (if (= ch \1) 1 0)) (:target c))]
+        (panel-segs! sb (r 14) (into [["BITS    " 0x808aa0]] (bit-digits now)))
+        (panel-segs! sb (r 15) (conj (into [["TARGET  " 0x808aa0]] (bit-digits want))
+                                     (if (= now want) ["✓" 0x9bea7a] ["" 0])))
+        (panel-line! sb (r 16) "" 0))
+      (doseq [[j k] (map-indexed vector (filter (:cups c) [\b \r \g]))]
+        (let [n (get (:cups c) k) have (get (:cups o) (int k) 0)]
+          (panel-segs! sb (r (+ 14 j))
+                       [["■ " (get w/cup-colour k)]
+                        [(format "%-6s%d / %d " (cup-name k) have n)
+                         (cond (= have n) 0x9bea7a (> have n) 0xff6060 :else 0xc8d0e8)]
+                        [(cond (= have n) "✓" (> have n) "over" :else "") (if (> have n) 0xff6060 0x9bea7a)]]))))
+    (panel-line! sb (r 17)
+                 (cond (:reset-t o) "unwinding…"
+                       (some :hold (:balls st)) "waiting: lean ← or →"
+                       (seq (:balls st)) "a marble in the works"
+                       (pos? (:supply o)) "SPACE drops a marble"
+                       :else "")
+                 0x8890a8)))
 
 ;; ---------------------------------------------------------------------------
 ;; main loop
