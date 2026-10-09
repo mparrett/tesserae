@@ -36,6 +36,53 @@ Each level has a par time. A clear at or under par earns gold (●), within 1.5�
 silver, otherwise bronze; a clear without losing a spark adds +500 and a ✦. The clear
 tally shows time against par, the medal, sets laid, the bonuses and new bests.
 
+## The twelve levels
+
+| | level | what's new |
+|---|---|---|
+| I · The Chipping | 1.1 First Light | Bricks are packed tetrominoes; clearing a whole piece is a SET bonus |
+| | 1.2 Mitosis | Cell tiles split the Spark; 2-hit hard tiles; a glass pickup (the Spark shatters into three on the trowel) |
+| II · The Turning | 2.1 Quarter Turn | The whole field rotates 90° every 15 s while play continues; your trowel stays put |
+| | 2.2 Twin Trowels | Top and bottom trowels move together, two open edges, two balls, rotation |
+| III · The Setting | 3.1 Blueprint | **Reverse breakout**: ghost tiles set solid (gold-rimmed) when struck; build the crown |
+| | 3.2 Grout Creep | Reverse mode where set tiles periodically crumble back to ghosts |
+| | 3.3 Mortar Well | Breakout × Tetris: mortar tetrominoes fall down a steel well; strike a piece's side to shove it, from below to turn it; full courses clear. Lay five |
+| IV · The Tilt | 4.1 Tilt Table | No paddle: tilt a labyrinth to roll a marble to every lamp; pits swallow it |
+| | 4.2 Marble Run | Three marbles, breakable soft walls |
+| V · Lodestone | 5.1 Lodestone | Gravity, magnetic tiles that bend the Spark, a magnet trowel (catch / aim / release), rubber, lead and ghost balls (ghost slips through three tiles) |
+| VI · The Heart | 6.1 The Heart | The Spark starts walled in; no paddle; you steer one tile the game lends you, and it moves on every 8 s |
+| | 6.2 The Grout Core | Finale, after Yars' Revenge: a pulsing core (6 hits) behind a scrolling, self-mending shield; a rainbow neutral zone that spins the Spark; a homing Destroyer that stuns the trowel; a Swirl to dodge every 12 s |
+
+## How it renders
+
+Every terminal cell is two square *pixels* (`▀` with fg = top, bg = bottom), so the arena is a
+true square raster that can be sampled through any rotation. Tiles and balls live in a 48×48
+world; the screen samples it through the current field angle. That is why the quarter turns
+are real rotations and not swaps.
+
+Per frame (`tesserae/gfx.lg`):
+
+1. The static layer (tiles, background, pegboard) sits in a posterized world-pixel cache. Only
+   tiles that change are re-sampled.
+2. Balls, trails, particles and lodestone halos add light to a screen-space accumulation
+   buffer and mark their cells dirty. The trowel writes a solid overlay with horizontal
+   anti-aliasing. Ball cores are sub-cell *glyph sprites*: the disc's coverage of the cell's
+   2×2 quadrant or 2×3 sextant subcells is thresholded, and the mask is the glyph index
+   (fg = ball light, bg = the cell's darker pixel). Sextants (U+1FB00) need a font or
+   terminal that draws them (Ghostty, kitty, WezTerm, foot); `--glyphs off` is the plain
+   light-buffer ball.
+3. `compose!` walks dirty rows and cells only, adds light, posterizes to 6 bits per channel
+   before diffing, and compares against what the terminal already shows. It emits changed
+   cells with SGR state tracking, contiguous-run cursor elision and cached SGR strings, all
+   inside one DEC 2026 synchronized frame.
+
+Steady play costs about 60–150 changed cells, 2–4 KB, per frame at 50 fps. A full-field redraw
+(rotation, level start) is the expensive case; see `docs/PLAN.md` for the AOT path.
+
+Physics runs at a fixed 240 Hz substep: axis-separated tile collisions, paddle bounces
+computed in the screen frame (so the field can turn under a moving ball), screen-frame
+gravity and tilt, and inverse-square lodestones.
+
 ## Editor
 
 ```sh
@@ -147,53 +194,6 @@ trowel in any terminal that reports motion.
 | TAB | take another tile (Heart, costs 25) |
 | P | pause, R restart level, Q back to the menu, Ctrl-C quit |
 | ] / [ | debug: win the level / lose a spark |
-
-## The twelve levels
-
-| | level | what's new |
-|---|---|---|
-| I · The Chipping | 1.1 First Light | Bricks are packed tetrominoes; clearing a whole piece is a SET bonus |
-| | 1.2 Mitosis | Cell tiles split the Spark; 2-hit hard tiles; a glass pickup (the Spark shatters into three on the trowel) |
-| II · The Turning | 2.1 Quarter Turn | The whole field rotates 90° every 15 s while play continues; your trowel stays put |
-| | 2.2 Twin Trowels | Top and bottom trowels move together, two open edges, two balls, rotation |
-| III · The Setting | 3.1 Blueprint | **Reverse breakout**: ghost tiles set solid (gold-rimmed) when struck; build the crown |
-| | 3.2 Grout Creep | Reverse mode where set tiles periodically crumble back to ghosts |
-| | 3.3 Mortar Well | Breakout × Tetris: mortar tetrominoes fall down a steel well; strike a piece's side to shove it, from below to turn it; full courses clear. Lay five |
-| IV · The Tilt | 4.1 Tilt Table | No paddle: tilt a labyrinth to roll a marble to every lamp; pits swallow it |
-| | 4.2 Marble Run | Three marbles, breakable soft walls |
-| V · Lodestone | 5.1 Lodestone | Gravity, magnetic tiles that bend the Spark, a magnet trowel (catch / aim / release), rubber, lead and ghost balls (ghost slips through three tiles) |
-| VI · The Heart | 6.1 The Heart | The Spark starts walled in; no paddle; you steer one tile the game lends you, and it moves on every 8 s |
-| | 6.2 The Grout Core | Finale, after Yars' Revenge: a pulsing core (6 hits) behind a scrolling, self-mending shield; a rainbow neutral zone that spins the Spark; a homing Destroyer that stuns the trowel; a Swirl to dodge every 12 s |
-
-## How it renders
-
-Every terminal cell is two square *pixels* (`▀` with fg = top, bg = bottom), so the arena is a
-true square raster that can be sampled through any rotation. Tiles and balls live in a 48×48
-world; the screen samples it through the current field angle. That is why the quarter turns
-are real rotations and not swaps.
-
-Per frame (`tesserae/gfx.lg`):
-
-1. The static layer (tiles, background, pegboard) sits in a posterized world-pixel cache. Only
-   tiles that change are re-sampled.
-2. Balls, trails, particles and lodestone halos add light to a screen-space accumulation
-   buffer and mark their cells dirty. The trowel writes a solid overlay with horizontal
-   anti-aliasing. Ball cores are sub-cell *glyph sprites*: the disc's coverage of the cell's
-   2×2 quadrant or 2×3 sextant subcells is thresholded, and the mask is the glyph index
-   (fg = ball light, bg = the cell's darker pixel). Sextants (U+1FB00) need a font or
-   terminal that draws them (Ghostty, kitty, WezTerm, foot); `--glyphs off` is the plain
-   light-buffer ball.
-3. `compose!` walks dirty rows and cells only, adds light, posterizes to 6 bits per channel
-   before diffing, and compares against what the terminal already shows. It emits changed
-   cells with SGR state tracking, contiguous-run cursor elision and cached SGR strings, all
-   inside one DEC 2026 synchronized frame.
-
-Steady play costs about 60–150 changed cells, 2–4 KB, per frame at 50 fps. A full-field redraw
-(rotation, level start) is the expensive case; see `docs/PLAN.md` for the AOT path.
-
-Physics runs at a fixed 240 Hz substep: axis-separated tile collisions, paddle bounces
-computed in the screen frame (so the field can turn under a moving ball), screen-frame
-gravity and tilt, and inverse-square lodestones.
 
 ## Layout
 
