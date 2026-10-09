@@ -37,6 +37,12 @@
 (def quit? (atom false))
 (def fps-stat (atom [0.0 0 0]))
 
+(defn title-li?
+  "The title screen runs as level index -1. nil (a special level's story card
+   before its level loads) is not the title."
+  [li]
+  (and (some? li) (neg? li)))
+
 (defn lvl [] (:level @S))
 (defn lv [k] (get (lvl) k))
 
@@ -1401,7 +1407,7 @@
 (defn update-paddle! [dt]
   (let [p (:paddle @S)
         hw (* 0.5 PADDLE-W)
-        auto? (or (:autoplay @opts) (neg? (:li @S)))
+        auto? (or (:autoplay @opts) (title-li? (:li @S)))
         mx @in/mouse-x
         sc @scr
         target (cond
@@ -1530,7 +1536,7 @@
                 (when (= :pit (:lost b)) (float-text! (:x b) (:y b) "FELL" 0xff7080)))))
         (swap! S assoc :balls live)))
     (when (and (empty? (:balls @S)) (not= :over (:mode @S)) (not (lv :orrery)))
-      (if (neg? (:li @S)) (spawn-balls!) (life-lost!)))))
+      (if (title-li? (:li @S)) (spawn-balls!) (life-lost!)))))
 
 (defn update-balls-frame! [dt]
   ;; per frame: stuck balls ride the paddle, trails, lead timeout, speed
@@ -1609,7 +1615,7 @@
           (swap! S assoc :decay-t (lv :decay)))
         (swap! S assoc :decay-t t))))
   (when (and (:autoplay @opts) (some :stuck (:balls @S)) (> (:time @S) 0.8)) (launch!))
-  (when (neg? (:li @S)) (when (some :stuck (:balls @S)) (launch!)))
+  (when (title-li? (:li @S)) (when (some :stuck (:balls @S)) (launch!)))
   (update-balls-frame! dt)
   (when (lv :core) (update-boss! dt))
   (when (lv :well) (update-well! dt))
@@ -1617,7 +1623,7 @@
   (step-world! dt)
   (when (:goal-dirty @S) (recount-goal!))
   (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
-    (if (neg? (:li @S))
+    (if (title-li? (:li @S))
       (load-level! -1)
       (level-won!))))
 
@@ -1731,7 +1737,7 @@
     (when (and (:banner st) (pos? (:banner-t st)))
       (let [s (str " " (:banner st) " ")]
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (quot (:rows sc) 2) s (:banner-c st))))
-    (when (and (paddle-level?) (some :stuck (:balls st)) (not (neg? (:li st))) (= :play (:mode st)))
+    (when (and (paddle-level?) (some :stuck (:balls st)) (not (title-li? (:li st))) (= :play (:mode st)))
       (let [s "SPACE · launch"]
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (- (:rows sc) 5) s 0xa0a8c0)))
     (meta-overlay! sc st)
@@ -1758,7 +1764,7 @@
 
 (defn controls []
   (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
+    (title-li? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
     (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" "P pause  Q menu"]
     (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
     (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
@@ -1783,7 +1789,7 @@
 
 (defn draw-panel! [^StringBuilder sb]
   (let [sc @scr st @S l (lvl) top (:oy sc) acc (:accent (theme))
-        title? (neg? (:li st))
+        title? (title-li? (:li st))
         r (fn [i] (+ top i))
         goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
                     :core "core hits" :lines "lines to go" :orrery "to go" "")
@@ -1970,7 +1976,7 @@
       nil)))
 
 (defn handle-event! [[k ev]]
-  (let [st @S mode (:mode st) title? (neg? (:li st))]
+  (let [st @S mode (:mode st) title? (title-li? (:li st))]
     (cond
       (= k :ctrl-c) (when-not *in-wasm* (reset! quit? true))   ; a browser tab can't quit
       (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
