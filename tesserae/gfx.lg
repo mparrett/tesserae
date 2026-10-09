@@ -92,6 +92,7 @@
      :wcache (int-array npx)      ; posterized static colour per *world* pixel
      :sgr-cache (volatile! {})
      :full (atom true)
+     :coarse (atom false)         ; one sample per 2x2 px block (rotation transitions)
      :stats (int-array 4)}))      ; [cells-emitted bytes dirty-cells -]
 
 (defn too-small? [scr] (< (:tc scr) (+ 48 2 20)))
@@ -308,6 +309,8 @@
                  base
                  (do (aset ar i 0.0) (aset ag i 0.0) (aset ab i 0.0)
                      (post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))))))
+        coarse? @(:coarse scr)
+        prev-top (volatile! 0)
         fg (volatile! -1) bg (volatile! -1)
         last-i (volatile! -100)
         emitted (volatile! 0) dirty (volatile! 0)]
@@ -322,8 +325,10 @@
                 (let [i (+ cx base-i)]
                   (when (or full? (== 1 (aget mark i)) (== 1 (aget pmark i)))
                     (vswap! dirty inc)
-                    (let [top (px cx y0)
-                          bot (px cx y1)
+                    (let [top (if coarse?
+                                (if (odd? cx) @prev-top (vreset! prev-top (px cx y0)))
+                                (px cx y0))
+                          bot (if coarse? top (px cx y1))
                           tg (aget tglyph i)
                           gl (if tg (int (first tg)) 0x2580)]
                       (aset ovr (+ cx (* y0 S)) -1)

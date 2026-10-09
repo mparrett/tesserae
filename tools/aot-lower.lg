@@ -1,0 +1,98 @@
+;; tools/aot-lower.lg — lower the defns of game namespaces to native Go for an
+;; AOT-tagged lg binary. Driven by tools/build-aot.sh; run it with an lg built
+;; from the SAME let-go commit as the worktree the Go is written into.
+;;
+;;   lg -source-paths <game> tools/aot-lower.lg <out-root> <ns> [<ns> ...]
+;;
+;; For each namespace: require it (so its defs, requires and macros exist, as
+;; benchmark/aot/build.lg does by eval'ing each form), read its source file,
+;; keep only defn/defn- forms, lower them with
+;; ir.passes.pipeline/lower-ns-to-go-result into
+;; <out-root>/<ns-as-path>/<leaf>.go, and print one line per defn arity:
+;;   AOT-LOWERED <ns>/<name>/<arity>
+;;   AOT-FALLBACK <ns>/<name>/<arity> <reason>
+;; plus `AOT-PKG <reldir>` per package written. Defs, defmacros, top-level
+;; side effects etc. stay on bytecode (loaded from source at runtime).
+
+(require 'ir.passes.pipeline)
+(require 'ir.passes.typeinfer)
+(require 'string)
+
+(def argv *command-line-args*)
+(def out-root (first argv))
+(def ns-names (map symbol (rest argv)))
+
+(defn die [msg] (println "aot-lower ERROR:" msg) (os/exit 2))
+
+(when (or (nil? out-root) (empty? ns-names))
+  (die "usage: aot-lower.lg <out-root> <ns> [<ns> ...]"))
+
+(defn- defn-form? [f]
+  (and (seq? f) (contains? #{'defn 'defn-} (first f))))
+
+(defn- bare-name [f]
+  (let [n (second f)]
+    (str (if (and (seq? n) (= 'with-meta (first n))) (second n) n))))
+
+(defn- arity-vectors [f]
+  (let [tail (drop 2 f)
+        tail (if (string? (first tail)) (rest tail) tail)
+        tail (if (map? (first tail)) (rest tail) tail)
+        x    (first tail)]
+    (if (vector? x) [x] (mapv first tail))))
+
+(defn- arity-of [argvec] (count (remove (fn [p] (= '& p)) argvec)))
+
+(defn- nsname->pkg [ns-name]
+  (string/replace (last (string/split (str ns-name) #"\.")) "-" "_"))
+
+(defn- nsname->reldir [ns-name]
+  (string/replace (string/replace (str ns-name) "-" "_") "." "/"))
+
+(defn- nsname->src [ns-name]
+  (str (string/replace (string/replace (str ns-name) "-" "_") "." "/") ".lg"))
+
+(defn- error-message [x]
+  (let [s (str x)
+        m (re-find #":message \"((?:[^\"\\]|\\.)*)\"" s)]
+    (if m (second m) s)))
+
+;; Why one defn did not emit: lower it alone (what lowering-census does).
+(defn- standalone-reason [f the-ns]
+  (let [r (try
+            (binding [ir.passes.pipeline/*target* :go
+                      ir.passes.typeinfer/*typeinfer-max-drains* nil]
+              (ir.passes.pipeline/compile-form f the-ns))
+            (catch e {:status :fallback :reason (str e)}))]
+    (if (or (= :lowered (:status r)) (= :multi-fn-template (:kind r)))
+      "lowered alone but dropped by the package pass"
+      (string/replace (error-message (or (:reason r) (str "status " (:status r)))) "\n" " "))))
+
+(defn lower-one! [ns-name]
+  (require ns-name)
+  (let [src     (nsname->src ns-name)
+        forms   (read-string (str "[" (slurp src) "]"))
+        defns   (vec (filter defn-form? forms))
+        pkg     (nsname->pkg ns-name)
+        reldir  (nsname->reldir ns-name)
+        t0      (System/nanoTime)
+        res     (ir.passes.pipeline/lower-ns-to-go-result pkg ns-name defns)
+        ms      (quot (- (System/nanoTime) t0) 1000000)
+        emitted (set (map (fn [e] [(:fn-name e) (:arity e)]) (:fns res)))
+        dir     (str out-root "/" reldir)]
+    (os/sh "mkdir" "-p" dir)
+    (spit (str dir "/" pkg ".go") (:source res))
+    (println "AOT-PKG" reldir (str ms "ms"))
+    (doseq [f defns]
+      (let [nm (bare-name f)]
+        (doseq [av (arity-vectors f)]
+          (let [unit (str ns-name "/" nm "/" (arity-of av))]
+            (if (contains? emitted [nm (arity-of av)])
+              (println "AOT-LOWERED" unit)
+              (println "AOT-FALLBACK" unit (standalone-reason f (the-ns ns-name))))))))))
+
+;; One top-level form: require switches nothing here, but keep the driver
+;; immune to *ns* changes anyway (same structure as benchmark/aot/build.lg).
+(doseq [n ns-names]
+  (try (lower-one! n)
+       (catch e (die (str n ": lowering failed: " e)))))

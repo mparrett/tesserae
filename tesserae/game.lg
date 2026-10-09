@@ -293,7 +293,12 @@
   "Paddle levels without gravity keep a constant speed per material, and the
    screen-vertical component never drops below 30% (no endless horizontals)."
   [b]
-  (if (or (:stuck b) (lv :tilt) (lv :gravity)) b
+  (cond
+    (or (:stuck b) (lv :tilt)) b
+    (lv :gravity)
+    (let [sp (len (:vx b) (:vy b)) cap (* 1.8 (base-speed b))]
+      (if (> sp cap) (assoc b :vx (* (:vx b) (/ cap sp)) :vy (* (:vy b) (/ cap sp))) b))
+    :else
       (let [sp (len (:vx b) (:vy b))
             target (base-speed b)]
         (if (< sp 0.01) b
@@ -450,8 +455,10 @@
           (let [th (mod (:to r) TAU)
                 th (* (math/round (/ th (* 0.5 math/PI))) 0.5 math/PI)]
             (swap! S assoc :rot nil :theta th :rot-timer (lv :rotate))
+            (reset! (:coarse @scr) false)
             (gfx/set-angle! @scr th))
           (do (swap! S assoc :rot (assoc r :t t) :theta th)
+              (reset! (:coarse @scr) (not (:fine-rotation @opts)))
               (gfx/set-angle! @scr th)))
         (gfx/invalidate! @scr))
       (when (lv :rotate)
