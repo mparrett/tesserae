@@ -290,3 +290,16 @@ one conflict, in the ball draw call, and both sides were kept.
   because a `[`/`]` debug run went without `TESS_STORAGE_ID`. Removed so the first real session
   starts clean. Lesson: test runs that can reach game over or clear should set
   `TESS_STORAGE_ID`, as the agent prompts asked.
+
+## 2026-10-09: A/B against let-go tip (user suggestion)
+
+- Upstream moved from `a13e042` to `49858bd` during the session. Relevant merges: #1040
+  (typeinfer join reports whether a fact changed), #1044 (lower-go unboxes a trampoline result,
+  overlapping our local `a8c24ea` part 1), #1042 (string index perf), #1037 (`-import`).
+- **Game runtime (VM) A/B:** `lg-49858bd247` vs `lg-a13e042791`. The test suite passes on both
+  (241 assertions), and the sims behave the same. The frame benchmark is within noise on a box
+  shared with the repro agent (full compose @0.3 rad: 61–71 vs 66–88 ms; coarse: 43–49 vs
+  43–54 ms). No reason to move the pin before the playtest. The changes that matter for us
+  are in lowering, which the repro agent is A/B-ing (base vs tip vs tip + open #1039/#1038).
+- **surprise:** `lg-at.sh` at tip fails the smoke boot budget on this box. Needs
+  `env 'SMOKE-BOOT-BUDGET-MS=60'` (already noted in the devbox memory).
