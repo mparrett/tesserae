@@ -4,7 +4,8 @@
      .  empty           ?  tetromino fill (breakable, packed per seed)
      ,  ghost fill      IOTSZJL breakable piece / iotszjl ghost piece
      H  hard (2 hits)   #  wall          +  mitosis   *  rubber   %  lead
-     @  lodestone       x  pit           $  lamp      B  ball / marble start")
+     @  lodestone       x  pit           $  lamp      B  ball / marble start
+     =  grout shield    C  the Grout Core")
 
 (def prologue
   ["Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the sky's memory."
@@ -51,6 +52,15 @@
 
 ;; ---------------------------------------------------------------------------
 ;; maps
+
+(defn ring-path
+  "Tile cells of the perimeter of box [x0 y0 x1 y1], clockwise from the
+   top-left corner. The Grout Core's shield scrolls along this path."
+  [[x0 y0 x1 y1]]
+  (vec (concat (for [x (range x0 (inc x1))] [x y0])
+               (for [y (range (inc y0) (inc y1))] [x1 y])
+               (for [x (range (dec x1) (dec x0) -1)] [x y1])
+               (for [y (range (dec y1) y0 -1)] [x0 y]))))
 
 (def map-first-light
   (gen (fn [x y] (if (and (<= 2 y 7) (<= 2 x 21)) \? \.))))
@@ -203,6 +213,23 @@
         cells (into {} (concat (place "TESS" 3 0) (place "ERAE" 10 4)))]
     (gen (fn [x y] (get cells [x y] \.)))))
 
+(def core-shield
+  ;; an outer ring that mends itself and an inner half-arc that does not
+  ;; :gap = initial empty slots (inclusive); :regen = mends itself
+  {:rings [{:box [8 2 16 10] :dir 1 :step 0.4 :colour 0xb0a48e :gap [19 22] :regen true}
+           {:box [10 4 14 8] :dir -1 :step 0.6 :colour 0x857a6a :gap [5 15]}]
+   :regen 3.0})
+
+(def map-grout-core
+  (let [shield (set (for [{:keys [box gap]} (:rings core-shield)
+                          [j c] (map-indexed vector (ring-path box))
+                          :when (not (<= (first gap) j (second gap)))]
+                      c))]
+    (gen (fn [x y]
+           (cond (and (<= 11 x 13) (<= 5 y 7)) \C
+                 (shield [x y]) \=
+                 :else \.)))))
+
 ;; ---------------------------------------------------------------------------
 ;; themes
 
@@ -212,7 +239,8 @@
    :umber  {:bg0 0x1e140c :bg1 0x2e1d10 :outside 0x0b0704 :accent 0xffc86a}
    :felt   {:bg0 0x0b2a16 :bg1 0x0f3a1e :outside 0x041008 :accent 0x9bea7a}
    :violet {:bg0 0x1a0b26 :bg1 0x2a1038 :outside 0x0a040e :accent 0xe070ff}
-   :crimson {:bg0 0x24080e :bg1 0x380c14 :outside 0x0e0305 :accent 0xff5a6e}})
+   :crimson {:bg0 0x24080e :bg1 0x380c14 :outside 0x0e0305 :accent 0xff5a6e}
+   :grout  {:bg0 0x121014 :bg1 0x1e1a1c :outside 0x060506 :accent 0xff8a3c}})
 
 ;; ---------------------------------------------------------------------------
 ;; chapters & levels
@@ -279,7 +307,21 @@
            ""
            "You have no Trowel, only the tile the Mosaic lends you, and it will not stay lent for long."
            ""
-           "Guard the breaches. Let the Spark eat its way out."]}])
+           "Guard the breaches. Let the Spark eat its way out."]}
+   {:id "6.2" :name "The Grout Core" :chapter "VI · THE HEART" :theme :grout
+    :map map-grout-core :goal :core :speed 23.0
+    :core {:hp 6}
+    :shield core-shield
+    :neutral {:rows [14 15]}
+    :destroyer {:speed 5.5 :fall 5.0 :delay 3.0}
+    :swirl {:every 12.0 :warn 1.2 :speed 36.0}
+    :card ["Under the Heart the Grout keeps its Core, the first knot of mortar, the one that set all the others."
+           ""
+           "Its shield turns and mends itself. Its Destroyer hunts the Trowel. When the Core flares it will throw itself at you: step aside."
+           ""
+           "Between you runs a seam of raw colour. The Spark comes through it changed."
+           ""
+           "Break the Core."]}])
 
 (def title-level
   {:id "--" :name "Attract" :chapter "" :theme :indigo :map map-title :goal :clear :speed 26.4})
