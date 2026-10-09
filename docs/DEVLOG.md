@@ -272,3 +272,17 @@ one conflict, in the ball draw call, and both sides were kept.
   (scripted). AOT rebuilt with `AOT_SKIP=compose!`: 61 defns native, about 1 min.
 - Known: the tally says "sets 0" on Orrery levels; pars are 45/60/60 s, set from one
   player's runs.
+
+## 2026-10-09: polish and wrap-up of v2
+
+- The tally line now depends on the goal: "laid" for blueprints, "sets" for clear goals, and
+  "courses laid", "lamps lit", "core broken" or "machine taught" elsewhere, replacing the old
+  "sets 0".
+- The browser build was rebuilt with the editor and Orrery namespaces. It boots in headless
+  Chromium with all 15 levels listed (locks, a hidden bonus chapter) and no console errors.
+- PLAN: v0, v1 and v2 checked off. Sound stays deferred, and v3 candidates are listed (boss
+  rotation, mortar speed-up, adaptive browser raster, re-lowering `compose!`).
+- Gallery republished as version 3 (Orrery, editor, browser).
+- **opportunity → in flight:** a background agent is delta-debugging the AOT typeinfer
+  slowdown into a minimal repro on branch `wip/typeinfer-repro`, as a local draft only. Every
+  probe is capped at 5 min and runs under the heavy lock.
