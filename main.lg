@@ -13,6 +13,8 @@
             "--seconds" (recur (drop 2 as) (assoc o :seconds (parse-double b)))
             "--glyphs" (recur (drop 2 as) (assoc o :glyphs (keyword b)))   ; quadrant|sextant|off
             "--stats" (recur (rest as) (assoc o :hud-stats true))
+            "--all" (recur (rest as) (assoc o :all true))                   ; unlock every level
+            "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
             (recur (rest as) o))))))
 
 (game/main! (parse-args *command-line-args*))

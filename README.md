@@ -15,8 +15,37 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
 ./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
+./play.sh --all                 # unlock every level on the title screen (testing)
+./play.sh --reset-progress      # forget saved scores, medals and unlocks
 LG=/path/to/lg ./play.sh        # use another let-go binary
 ```
+
+### Progress, unlocks and medals
+
+Progress is saved with let-go's `storage` namespace: one file per key under
+`~/.config/let-go/storage/<store>/` (`$XDG_CONFIG_HOME` if set). `play.sh` passes
+`-storage-id tesserae`; set `TESS_STORAGE_ID` to use another store. Keys are `best`
+(overall best score), `furthest` (the furthest unlocked level id) and `level/<id>`
+(best level score, best clear time, best medal, flawless flag), stored as EDN. If
+storage fails the game keeps running and the title panel says "progress not saved".
+`--autoplay` runs never save.
+
+On the title screen a level key starts only unlocked levels: level 1, plus every
+level up to the one after your furthest clear. `--level N` always bypasses locks.
+Each level has a par time. A clear at or under par earns gold (●), within 1.5× par
+silver, otherwise bronze; a clear without losing a spark adds +500 and a ✦. The clear
+tally shows time against par, the medal, sets laid, the bonuses and new bests.
+
+## Tests
+
+```sh
+./tools/test.sh                 # clojure.test suites in test/; exits 1 on any failure
+```
+
+They cover `tesserae.input/parse` (plain keys, CSI/SS3 arrows, kitty CSI-u
+press/repeat/release, BEL resize, Ctrl-C, mouse maps), tetromino packing determinism,
+level map validity (24×24, goal count > 0, a par per level) and the meta layer (medals,
+unlocks, a storage round trip in the throwaway store `tesserae-test`).
 
 You need a truecolor terminal at least 76x24. 124x50 or larger doubles the raster. Kitty,
 Ghostty, WezTerm, foot and recent iTerm2 send real key-release events, so held keys feel
@@ -30,6 +59,7 @@ trowel in any terminal that reports motion.
 | ← ↑ → ↓ | tilt the table (Tilt) / move your borrowed tile (Heart) |
 | TAB | take another tile (Heart, costs 25) |
 | P | pause, R restart level, Q back to the menu, Ctrl-C quit |
+| ] / [ | debug: win the level / lose a spark |
 
 ## The eleven levels
 
@@ -85,7 +115,9 @@ tesserae/gfx.lg      square-pixel raster, rotation, light buffer, diffed emitter
 tesserae/world.lg    24x24 tile grid (flat arrays), tetromino packer, pixel sampler
 tesserae/input.lg    kitty key protocol, repeat-hold fallback, SGR mouse motion
 tesserae/levels.lg   story, chapters, maps (ASCII or generator fns), themes
-tesserae/game.lg     rules, physics, modes, HUD, cards, frame loop
+tesserae/game.lg     rules, physics, modes, HUD, cards, clear tally, frame loop
+tesserae/meta.lg     saved progress (let-go storage), unlocks, par medals
+test/                clojure.test suites, run by tools/test.sh
 tools/               capture (tmux -> PNG/GIF), level runner, wait-for
 docs/PLAN.md         phases and what's next
 docs/captures/       milestone screenshots

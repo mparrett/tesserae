@@ -1,0 +1,47 @@
+(ns test.world-test
+  "Tetromino packing determinism and level map validity."
+  (:require [clojure.test :refer [deftest is testing]]
+            [tesserae.world :as w]
+            [tesserae.levels :as L]))
+
+(defn- snapshot [] [(vec w/tt) (vec w/tpiece) (vec w/tkind) (vec w/tbase)])
+
+(defn- load! [l seed] (w/load-map! (:map l) (get L/themes (:theme l)) seed))
+
+(deftest packing-is-deterministic
+  (doseq [l (filter #(re-find #"\?|," (apply str (:map %))) L/levels)]
+    (testing (:id l)
+      (load! l 42)
+      (let [a (snapshot)]
+        (load! l 42)
+        (is (= a (snapshot)) "same seed, same packing")
+        (load! l 43)
+        (is (not= (rest a) (rest (snapshot))) "another seed, another packing")))))
+
+(defn goal-count
+  "What the level's :goal asks for, counted on the freshly loaded world."
+  [l]
+  (case (:goal l)
+    (:clear :heart) (w/count-where w/breakable?)
+    :build (w/count-where #(= % w/GHOST))
+    :lamps (w/count-where #(= % w/LAMP))
+    :core (if (pos? (w/count-where #(= % w/CORE))) (get-in l [:core :hp] 0) 0)
+    ;; goal kinds this test does not know yet: something must be there to play for
+    (w/count-where #(and (pos? %) (not= % w/WALL) (not= % w/PIT)))))
+
+(deftest maps-are-valid
+  (doseq [[j l] (map-indexed vector (conj L/levels L/title-level))]
+    (testing (str (:id l) " " (:name l))
+      (is (= 24 (count (:map l))) "24 rows")
+      (is (every? #(= 24 (count %)) (:map l)) "24 cols per row")
+      (let [{:keys [starts]} (load! l (+ 11 j))]
+        (is (pos? (goal-count l)) "goal count > 0 after load")
+        (when (or (:tilt l) (:ward l))
+          (is (seq starts) "ball starts (B) present"))))))
+
+(deftest levels-have-metadata
+  (is (= (count L/levels) (count (distinct (map :id L/levels)))) "level ids are unique")
+  (doseq [l L/levels]
+    (testing (:id l)
+      (is (and (number? (:par l)) (pos? (:par l))) "a positive :par (seconds)")
+      (is (contains? L/themes (:theme l))))))

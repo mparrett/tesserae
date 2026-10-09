@@ -1,0 +1,61 @@
+(ns test.input-test
+  "tesserae.input/parse: raw read-key tokens -> [key event]."
+  (:require [clojure.test :refer [deftest is testing]]
+            [tesserae.input :as in]))
+
+(def E in/ESC)
+
+(deftest plain-chars
+  (is (= [:a :press] (in/parse "a")))
+  (is (= [:d :press] (in/parse "D")) "upper case folds to the same key")
+  (is (= [:space :press] (in/parse " ")))
+  (is (= [:enter :press] (in/parse "\r")))
+  (is (= [:enter :press] (in/parse "\n")))
+  (is (= [:tab :press] (in/parse "\t")))
+  (is (= [:esc :press] (in/parse E)))
+  (is (= [(keyword "]") :press] (in/parse "]")))
+  (is (nil? (in/parse nil))))
+
+(deftest arrows
+  (testing "CSI"
+    (is (= [:up :press] (in/parse (str E "[A"))))
+    (is (= [:down :press] (in/parse (str E "[B"))))
+    (is (= [:right :press] (in/parse (str E "[C"))))
+    (is (= [:left :press] (in/parse (str E "[D")))))
+  (testing "SS3 (application cursor keys)"
+    (is (= [:up :press] (in/parse (str E "OA"))))
+    (is (= [:down :press] (in/parse (str E "OB"))))
+    (is (= [:right :press] (in/parse (str E "OC"))))
+    (is (= [:left :press] (in/parse (str E "OD"))))))
+
+(deftest kitty-csi-u
+  (testing "letters: press, repeat, release"
+    (is (= [:a :press] (in/parse (str E "[97u"))))
+    (is (= [:a :press] (in/parse (str E "[97;1:1u"))))
+    (is (= [:a :repeat] (in/parse (str E "[97;1:2u"))))
+    (is (= [:a :release] (in/parse (str E "[97;1:3u")))))
+  (testing "space, enter, esc, tab"
+    (is (= [:space :press] (in/parse (str E "[32u"))))
+    (is (= [:space :release] (in/parse (str E "[32;1:3u"))))
+    (is (= [:enter :press] (in/parse (str E "[13u"))))
+    (is (= [:esc :press] (in/parse (str E "[27u"))))
+    (is (= [:tab :press] (in/parse (str E "[9u")))))
+  (testing "arrows with event types"
+    (is (= [:left :press] (in/parse (str E "[1;1:1D"))))
+    (is (= [:left :repeat] (in/parse (str E "[1;1:2D"))))
+    (is (= [:left :release] (in/parse (str E "[1;1:3D"))))
+    (is (= [:up :release] (in/parse (str E "[1;1:3A")))))
+  (testing "kitty switches the hold model over"
+    (is (true? @in/kitty?)))
+  (testing "unknown functional keys are dropped"
+    (is (nil? (in/parse (str E "[5~"))))))
+
+(deftest control-tokens
+  (is (= [:resize :press] (in/parse "\u0007")) "BEL = terminal resized")
+  (is (= [:ctrl-c :press] (in/parse "\u0003"))))
+
+(deftest mouse
+  (let [move {:x 31 :y 12 :button :none :action :press}
+        click {:x 5 :y 3 :button :left :action :press}]
+    (is (= [:mouse move] (in/parse move)) "1003 motion arrives as a :none press")
+    (is (= [:mouse click] (in/parse click)))))

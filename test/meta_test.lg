@@ -1,0 +1,54 @@
+(ns test.meta-test
+  "Medals, records, unlocks and the storage round trip (run under a test store id)."
+  (:require [clojure.test :refer [deftest is testing]]
+            [tesserae.meta :as M]
+            [tesserae.levels :as L]))
+
+(def lv [{:id "a" :par 100} {:id "b" :par 50} {:id "c"} {:id "d" :par 10}])
+
+(deftest medals
+  (is (= :gold (M/medal 100.0 100)))
+  (is (= :silver (M/medal 100.1 100)))
+  (is (= :silver (M/medal 150.0 100)))
+  (is (= :bronze (M/medal 150.1 100)))
+  (is (nil? (M/medal 10.0 nil)) "no par, no medal")
+  (is (= :gold (M/better-medal :gold :bronze)))
+  (is (= :silver (M/better-medal nil :silver))))
+
+(deftest unlocks-and-records-in-memory
+  (reset! M/saving? false)
+  (reset! M/progress {:best 0 :furthest nil :levels {}})
+  (is (= [true false false false] (mapv #(M/unlocked? lv % false) (range 4))))
+  (is (every? #(M/unlocked? lv % true) (range 4)) "--all")
+  (let [f (M/record-clear! lv 0 {:score 900 :secs 120.0 :flawless false})]
+    (is (= :silver (:medal f)))
+    (is (nil? (:prev f))))
+  (is (= [true true false false] (mapv #(M/unlocked? lv % false) (range 4))))
+  (let [f (M/record-clear! lv 0 {:score 800 :secs 90.0 :flawless true})]
+    (is (= :gold (:medal f)))
+    (is (:best-time? f))
+    (is (not (:best-score? f))))
+  (is (= {:score 900 :time 90.0 :medal :gold :flawless true :clears 2} (M/record "a")))
+  (M/record-clear! lv 2 {:score 10 :secs 5.0 :flawless false})
+  (is (nil? (:medal (M/record "c"))) "a level without :par records no medal")
+  (is (M/unlocked? lv 3 false))
+  (is (= "d" (:furthest @M/progress)))
+  (is (M/save-best! 50))
+  (is (not (M/save-best! 40)))
+  (is (= 50 (M/best))))
+
+(deftest storage-round-trip
+  (reset! M/saving? true)
+  (M/reset-all!)
+  (M/load!)
+  (is (= {:best 0 :furthest nil :levels {}} @M/progress) "fresh store")
+  (M/record-clear! L/levels 0 {:score 1234 :secs 99.5 :flawless true})
+  (M/save-best! 4321)
+  (let [mem @M/progress]
+    (M/load!)
+    (is (= mem @M/progress) "what was saved loads back")
+    (is @M/ok? "storage stayed usable"))
+  (is (some #{"best"} (storage/keys)))
+  (M/reset-all!)
+  (is (empty? (storage/keys)) "--reset-progress empties the store")
+  (reset! M/saving? false))

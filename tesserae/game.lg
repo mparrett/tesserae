@@ -10,6 +10,7 @@
             [tesserae.world :as w]
             [tesserae.input :as in]
             [tesserae.levels :as L]
+            [tesserae.meta :as M]
             [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -38,6 +39,10 @@
 (defn lv [k] (get (lvl) k))
 
 (defn theme [] (get L/themes (or (lv :theme) :indigo)))
+
+;; meta layer hooks (defined in the "meta layer" section near the end)
+(declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?
+         meta-clear-tick! meta-clear-key! meta-overlay! meta-title-panel! meta-hud! meta-controls-row)
 
 ;; ---------------------------------------------------------------------------
 ;; small helpers
@@ -445,7 +450,9 @@
             :ward -1 :ward-t 0.0 :ward-save nil
             :decay-t (or (:decay l) 0.0)
             :time 0.0 :banner nil :banner-t 0.0
-            :lodes (lodestones)})
+            :lodes (lodestones)
+            ;; meta layer: per-level bookkeeping
+            :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
     (when (:core l) (boss-init! l))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
@@ -626,6 +633,7 @@
 (defn swirl-hit! [sx]
   (let [[wx wy] (gfx/s->w @scr sx PADDLE-Y)]
     (burst! wx wy 0xff5030 34 26.0)
+    (swap! S update :lost inc)                     ; meta: no "unbroken" bonus
     (let [st (swap! S update :lives dec)]
       (if (<= (:lives st) 0)
         (do (swap! S assoc :mode :over :mode-t 0.0)
@@ -826,6 +834,7 @@
     (burst! (clampf (:x b) 1.0 47.0) (clampf (:y b) 1.0 47.0) 0xff5050 18 18.0)))
 
 (defn life-lost! []
+  (swap! S update :lost inc)                       ; meta: no "unbroken" bonus
   (if (lv :tilt)
     (do (add-score! -150)
         (banner! "MARBLE LOST  -150" 0xff7080 1.4)
@@ -849,7 +858,8 @@
     (release-ward!)
     (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus
            :dest nil :swirl nil :swirl-warn nil :stun 0.0)
-    (banner! (if (lv :core) "THE CORE IS BROKEN" "MOSAIC RESTORED") 0xfff2a0 3.0)))
+    (banner! (if (lv :core) "THE CORE IS BROKEN" "MOSAIC RESTORED") 0xfff2a0 3.0)
+    (meta-won!)))
 
 (defn step-world! [dt]
   (let [open (open-sides)
@@ -1050,6 +1060,7 @@
     (when (and (paddle-level?) (some :stuck (:balls st)) (not (neg? (:li st))) (= :play (:mode st)))
       (let [s "SPACE · launch"]
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (- (:rows sc) 5) s 0xa0a8c0)))
+    (meta-overlay! sc st)
     (gfx/compose! sc w/sample sb)))
 
 (def panel-cache (atom {}))
@@ -1091,9 +1102,7 @@
     (if title?
       (do (panel-line! sb (r 2) "a mosaic breaker" 0x9098b0)
           (panel-line! sb (r 3) "" 0)
-          (doseq [[j lv] (map-indexed vector L/levels)]
-            (panel-line! sb (r (+ 4 j)) (str (level-key-label j) "  " (:id lv) " " (:name lv)) 0xb0b8d0))
-          (panel-line! sb (r 15) (str "best  " (:best st 0)) 0x808aa0))
+          (meta-title-panel! sb r))
       (do (panel-line! sb (r 2) (:chapter l) acc)
           (panel-line! sb (r 3) (str (:id l) "  " (:name l)) 0xe8ecf8)
           (panel-line! sb (r 4) "" 0)
@@ -1121,12 +1130,12 @@
                              (pos? (:stun st 0.0)) 0xffe070
                              (and (:swirl l) (< (:swirl-t st 99.0) 3.0)) 0xffa060
                              :else acc))
-          (panel-line! sb (r 11) (str "time    " (int (:time st)) "s") 0x808aa0)))
+          (meta-hud! sb r)))
     (let [cs (controls)]
       (doseq [[j s] (map-indexed vector cs)]
-        (panel-line! sb (r (+ 17 j)) s 0x8890a8)))
+        (panel-line! sb (r (+ (meta-controls-row) j)) s 0x8890a8)))
     (when (:hud-stats @opts)
-      (panel-line! sb (r 21) (format "%2.0ffps %4dc %5.1fKB" fps cells (/ bytes 1024.0)) 0x505870))))
+      (panel-line! sb (r (+ (meta-controls-row) 4)) (format "%2.0ffps %4dc %5.1fKB" fps cells (/ bytes 1024.0)) 0x505870))))
 
 (defn draw-frame-border! [^StringBuilder sb]
   (let [sc @scr]
@@ -1220,7 +1229,7 @@
 
 (defn begin-level! [li]
   (if (>= li (count L/levels))
-    (do (swap! S update :best (fnil max 0) (:score @S))
+    (do (meta-epilogue!)
         (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title]))
     (let [l (nth L/levels li)]
       (load-level! li)
@@ -1263,12 +1272,13 @@
                    (contains? #{:space :enter :click} k) (new-game! 0)
                    (and (keyword? k) (= 1 (count (name k))))
                    (let [j (str/index-of level-keys (name k))]
-                     (when (and j (< j (count L/levels))) (new-game! j)))
+                     (when (and j (< j (count L/levels)) (meta-unlocked? j)) (new-game! j)))
                    :else nil)
       (= mode :over) (cond (contains? #{:space :enter} k)
                            (do (swap! S assoc :lives 5 :score (quot (:score st) 2))
                                (enter-level! (:li st)))
                            (contains? #{:q :esc} k) (to-title!))
+      (= mode :clear) (meta-clear-key! k ev)
       (= mode :pause) (cond (contains? #{:p :space} k) (swap! S assoc :mode :play :banner-t 0.0)
                             (contains? #{:q :esc} k) (to-title!))
       (= mode :play)
@@ -1277,6 +1287,7 @@
         (= k :p) (do (swap! S assoc :mode :pause) (banner! "PAUSED" 0xffffff 1e9))
         (= k :r) (enter-level! (:li st))
         (= k (keyword "]")) (level-won!)
+        (= k (keyword "[")) (life-lost!)                ; debug: lose a spark
         (contains? #{:space :click} k)
         (cond (some :stuck (:balls st)) (launch!)
               (lv :tilt) (swap! S assoc :tilt [0.0 0.0])
@@ -1298,11 +1309,8 @@
     :play (do (update-play! dt) (update-fx! dt))
     :clear (do (update-fx! dt)
                (swap! S update :time + dt)
-               (when (< (rand) 0.25)
-                 (burst! (rnd 8 40) (rnd 8 30) (rand-nth (vals w/piece-colors)) 16 20.0))
-               (when (> (:mode-t @S) 2.8)
-                 (begin-level! (inc (:li @S)))))
-    :over (update-fx! dt)
+               (meta-clear-tick!))
+    :over (do (update-fx! dt) (meta-over!))
     :pause nil
     :card nil
     nil))
@@ -1317,6 +1325,215 @@
             (swap! fps-stat (fn [[f _ _]] [f (aget st 0) (aget st 1)])))
           (draw-panel! sb)))
     (gfx/present! sb)))
+
+;; ---------------------------------------------------------------------------
+;; meta layer (v1/meta): saved progress, unlocks, medals, the clear tally.
+;; Storage and medal rules live in tesserae/meta.lg; this section is the glue,
+;; reached through the small `meta-*` hooks declared near the top.
+
+(def TALLY-START 0.4)   ; s into :clear before the numbers start counting
+(def TALLY-COUNT 1.5)   ; s to count up
+(def TALLY-AUTO 6.0)    ; s before the next level starts on its own
+(def tally-done (+ TALLY-START TALLY-COUNT))
+
+(defn fmt-time [secs]
+  (let [s (int secs)] (format "%d:%02d" (quot s 60) (mod s 60))))
+
+(defn meta-init! [o]
+  (when (:reset-progress o) (M/reset-all!))
+  (M/load!)
+  (reset! M/saving? (not (:autoplay o)))
+  (swap! S assoc :best (M/best)))
+
+(defn meta-unlocked? [j] (M/unlocked? L/levels j (:all @opts)))
+
+(defn meta-controls-row [] (+ 7 (count L/levels)))
+
+(defn meta-won!
+  "Called at the end of level-won!: flawless bonus, save the record, build the tally."
+  []
+  (let [st @S
+        flawless (zero? (:lost st 0))
+        _ (when flawless (add-score! M/FLAWLESS-BONUS))
+        st @S
+        l (lvl)
+        secs (:time st)
+        lscore (- (:score st) (:score0 st 0))
+        facts (M/record-clear! L/levels (:li st) {:score lscore :secs secs :flawless flawless})
+        best? (M/save-best! (:score st))]
+    (swap! S assoc :banner-t 0.0 :best (M/best)
+           :tally (merge facts {:title (:banner st) :secs secs :par (:par l) :sets (:sets st 0)
+                                :bonus (:clear-bonus st 0) :lost (:lost st 0)
+                                :lscore lscore :best-overall? best?}))))
+
+(defn meta-over! []
+  (when-not (:over-saved @S)
+    (let [new? (M/save-best! (:score @S))]
+      (swap! S assoc :over-saved true :over-best? (boolean new?) :best (M/best)))))
+
+(defn meta-epilogue! []
+  (M/save-best! (:score @S))
+  (swap! S assoc :best (M/best)))
+
+(defn meta-clear-tick! []
+  ;; fireworks, kept above and below the tally text once it is up
+  (when (< (rand) 0.25)
+    (let [sc @scr
+          [sx sy] (if (< (:mode-t @S) TALLY-START)
+                    [(rnd 8 40) (rnd 8 30)]
+                    [(rnd 6 42) (if (< (rand) 0.6) (rnd 2 8) (rnd 41 45))])
+          [wx wy] (gfx/s->w sc sx sy)]
+      (burst! wx wy (rand-nth (vals w/piece-colors)) 16 20.0)))
+  (when (> (:mode-t @S) TALLY-AUTO)
+    (begin-level! (inc (:li @S)))))
+
+(defn meta-clear-key! [k ev]
+  (when (= ev :press)
+    (cond
+      (contains? #{:space :enter :click} k)
+      (let [t (:mode-t @S)]
+        (cond (< t 0.3) nil                                   ; a launch press still in flight
+              (< t tally-done) (swap! S assoc :mode-t tally-done)
+              :else (begin-level! (inc (:li @S)))))
+      (contains? #{:q :esc} k) (to-title!)
+      :else nil)))
+
+;; -- drawing ----------------------------------------------------------------
+
+(defn- ctext! [sc row s c]
+  (gfx/text! sc (quot (- (:cols sc) (count s)) 2) row s c))
+
+(def PLATE 0x090910)
+
+(defn- plate!
+  "A dark backing plate under text rows [r0, r1] and cols [c0, c1) (cells), so
+   the overlay stays readable over tiles and fireworks. One solid overlay rect."
+  [sc c0 r0 c1 r1]
+  (let [k (double (:k sc))]
+    (gfx/rect! sc (/ (- c0 2) k) (/ (* 2.0 r0) k) (/ (+ c1 2) k) (/ (* 2.0 (inc r1)) k) PLATE)))
+
+(defn- tally-line [label value] (format "%-11s%s" label value))
+
+(defn- pad-to [s n] (str s (apply str (repeat (max 0 (- n (count s))) " "))))
+
+(defn draw-tally! [sc st]
+  (let [{:keys [title secs par sets bonus lost lscore medal flawless prev
+                best-score? best-time? best-overall?]} (:tally st)
+        mt (:mode-t st)
+        f (clampf (/ (- mt TALLY-START) TALLY-COUNT) 0.0 1.0)
+        done? (>= f 1.0)
+        blink (even? (int (* 4 mt)))
+        l (lvl)
+        first? (nil? prev)
+        w 30
+        row0 (max 0 (- (quot (:rows sc) 2) 6))
+        x0 (quot (- (:cols sc) w) 2)
+        put! (fn [i s c] (gfx/text! sc x0 (+ row0 i) (pad-to s w) c))
+        mark (fn [s on?] (if (and done? on? (not first?)) (str s) ""))]
+    (plate! sc (- (quot (:cols sc) 2) 18) (dec row0) (+ (quot (:cols sc) 2) 18) (+ row0 13))
+    (ctext! sc row0 (str " " title " ") 0xfff2a0)
+    (ctext! sc (+ row0 1) (str " " (:id l) " · " (:name l) (if (and done? first?) "  · first clear " " ")) 0xb0b8d0)
+    (put! 3 (str (tally-line "time" (fmt-time (* f secs)))
+                 (if par (str " / par " (fmt-time par)) "")
+                 (mark "  BEST" best-time?))
+          (if (and done? best-time? (not first?)) 0xfff2a0 0xd8dcea))
+    (put! 4 (tally-line "medal" (cond (not done?) "·"
+                                      medal (str "● " (M/medal-name medal))
+                                      :else "—"))
+          (if (and done? medal) (M/medal-colour medal) 0xd8dcea))
+    (put! 5 (tally-line (if (= :build (:goal l)) "laid" "sets") (str (int (* f sets)))) 0xd8dcea)
+    (put! 6 (tally-line "time bonus" (str "+" (int (* f bonus)))) 0xd8dcea)
+    (put! 7 (tally-line "unbroken" (if flawless (str "+" (int (* f M/FLAWLESS-BONUS)) " ✦")
+                                       (str "— " lost " lost")))
+          (if flawless 0x9bea7a 0x9098b0))
+    (put! 8 (str (tally-line "level" (str (int (* f lscore)))) (mark "  BEST" best-score?))
+          (if (and done? best-score? (not first?)) 0xfff2a0 0xd8dcea))
+    (when (and done? best-overall?)
+      (ctext! sc (+ row0 10) " NEW HIGH SCORE " (if blink 0xffd24a 0xff9a40)))
+    (when done?
+      (ctext! sc (+ row0 12) " SPACE to continue "
+              (gfx/mix 0x505870 0xc0c8e0 (* 0.5 (+ 1 (math/sin (* 4 mt)))))))))
+
+(defn draw-over! [sc st]
+  (let [row (quot (:rows sc) 2) c0 (- (quot (:cols sc) 2) 19)]
+    (plate! sc c0 (dec row) (+ c0 38) (+ row 6))
+    (ctext! sc (+ row 2) (format " score %d   best %d " (:score st) (:best st 0)) 0xe8ecf8)
+    (when (:over-best? st)
+      (ctext! sc (+ row 3) " NEW BEST " (if (even? (int (* 4 (:mode-t st)))) 0xffd24a 0xff9a40)))
+    (when (> (:mode-t st) 1.0)
+      (ctext! sc (+ row 5) " SPACE retry (half score) · Q menu " 0x9098b0))))
+
+(defn meta-overlay!
+  "Arena text for the meta layer, drawn just before compose!."
+  [sc st]
+  (case (:mode st)
+    :clear (when (:tally st) (draw-tally! sc st))
+    :over (draw-over! sc st)
+    nil))
+
+(defn panel-segs!
+  "Like panel-line!, but a row of [text colour] segments."
+  [^StringBuilder sb row segs]
+  (let [sc @scr
+        segs (loop [ss segs left (dec PANEL-W) out []]
+               (if (or (empty? ss) (<= left 0)) out
+                   (let [[s c] (first ss) s (str s)
+                         s (if (> (count s) left) (subs s 0 left) s)]
+                     (recur (rest ss) (- left (count s)) (conj out [s c])))))
+        n (reduce + (map #(count (first %)) segs))
+        key segs]
+    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (not= key (get @panel-cache row)))
+      (swap! panel-cache assoc row key)
+      (gfx/at sb (:panel-x sc) row)
+      (gfx/bg! sb 0x000000)
+      (doseq [[s c] segs] (gfx/fg! sb c) (.append sb s))
+      (.append sb (apply str (repeat (- PANEL-W n) " "))))))
+
+(defn medal-glyph
+  "[glyph colour] for a level record."
+  [rec]
+  (cond (nil? rec) ["·" 0x505870]
+        (:medal rec) ["●" (M/medal-colour (:medal rec))]
+        :else ["○" 0xb0b8d0]))
+
+(defn meta-title-panel!
+  "Level list (medals, locks), best score and medal counts."
+  [^StringBuilder sb r]
+  (let [n (count L/levels)]
+    (doseq [[j l] (map-indexed vector L/levels)]
+      (let [rec (M/record (:id l))
+            open? (meta-unlocked? j)
+            [g gc] (medal-glyph rec)]
+        (panel-segs! sb (r (+ 4 j))
+                     (if open?
+                       [[(str (level-key-label j) " ") 0xb0b8d0] [g gc]
+                        [(if (:flawless rec) "✦" " ") 0x9bea7a]
+                        [(str " " (:id l) " " (:name l)) 0xb0b8d0]]
+                       [[(str (level-key-label j) " ") 0x3a4058] ["⊘" 0x5a4a50]
+                        [(str "  " (:id l) " " (:name l)) 0x3a4058]]))))
+    (panel-segs! sb (r (+ 4 n)) [["best  " 0x808aa0] [(str (M/best)) 0xfff2c0]])
+    (let [mc (M/medal-counts)]
+      (panel-segs! sb (r (+ 5 n))
+                   (if @M/ok?
+                     (vec (mapcat (fn [m] [["●" (M/medal-colour m)] [(str (get mc m 0) "  ") 0x808aa0]])
+                                  [:gold :silver :bronze]))
+                     [["progress not saved" 0x805050]])))))
+
+(defn meta-hud!
+  "In-level rows: time against par (coloured by the medal it is on pace for)
+   and this level's saved best."
+  [^StringBuilder sb r]
+  (let [st @S l (lvl) par (:par l)
+        t (if (= :clear (:mode st)) (:secs (:tally st) 0.0) (:time st))   ; frozen at the clear
+        pace (M/medal t par)]
+    (panel-segs! sb (r 11) [["time    " 0x808aa0]
+                            [(fmt-time t) (if pace (M/medal-colour pace) 0xc8d0e8)]
+                            [(if par (str " / par " (fmt-time par)) "") 0x808aa0]])
+    (let [rec (M/record (:id l)) [g gc] (medal-glyph rec)]
+      (panel-segs! sb (r 12)
+                   (if rec
+                     [["best    " 0x808aa0] [g gc] [(str " " (:score rec) " · " (fmt-time (:time rec))) 0x808aa0]]
+                     [["best    —" 0x505870]])))))
 
 ;; ---------------------------------------------------------------------------
 ;; main loop
@@ -1335,6 +1552,7 @@
     (reset! scr (gfx/make-screen tc tr PANEL-W)))
   (wire-world!)
   (reset! S {:score 0 :lives 5 :mode :play :mode-t 0.0 :best 0})
+  (meta-init! o)
   (term/raw-mode!)
   (term/alternate-screen)
   (term/hide-cursor)
