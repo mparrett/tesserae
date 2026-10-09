@@ -207,6 +207,36 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
 - Ctrl-C and Q on the title screen don't quit, because a tab has nothing to quit to.
   Resizing the window refits the grid, and the game re-lays out within half a second.
 
+## AOT build (optional)
+
+let-go can lower namespaces to native Go and bake them into a custom `lg`
+(its `benchmark/aot` pipeline). `tools/build-aot.sh` does that for the renderer
+(`tesserae.gfx`, `tesserae.world`), and the game then runs those functions natively:
+
+```sh
+# 1. a let-go checkout with the two patches the lowering needs
+git clone https://github.com/mparrett/let-go.git ../let-go-tesserae-aot
+git -C ../let-go-tesserae-aot checkout wt/tesserae-aot
+
+# 2. build the binary (Go toolchain required; about a minute)
+TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot \
+  AOT_SKIP=compose! ./tools/build-aot.sh
+
+# 3. play on it
+LG=../lg-tesserae-aot ./play.sh --stats
+```
+
+- `wt/tesserae-aot` is upstream let-go plus two commits: guarded native overrides for
+  functions with typed params (without it most hot functions silently stay on bytecode) and
+  cached var reads in lowered code. Part of the first commit is upstream now (#1044).
+- `AOT_SKIP=compose!` leaves the frame compositor on the VM. Lowering it takes over an hour
+  until [let-go#1051](https://github.com/nooga/let-go/pull/1051) lands; with that fix it takes
+  under a minute and full-frame redraws get about 2× faster.
+- The binary replaces the game's functions by name, so rebuild it after editing `gfx.lg` or
+  `world.lg`, or your edits won't run.
+- What to expect: sprites and sampling about 1.7× faster; full-field redraws (rotation, level
+  start) unchanged until `compose!` lowers too.
+
 ## Tests
 
 ```sh
