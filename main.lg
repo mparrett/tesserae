@@ -1,5 +1,5 @@
 (ns main
-  (:require [tesserae.game :as game]))
+  (:require [tesserae.game :as game] [js]))
 
 (defn parse-args [args]
   (loop [as args o {}]
@@ -17,4 +17,17 @@
             "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
             (recur (rest as) o))))))
 
-(game/main! (parse-args *command-line-args*))
+;; In the browser there are no command-line args; the same flags come from the
+;; page URL instead: ?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30.
+;; (js/url-param is nil off-browser.)
+(defn url-args []
+  (mapcat (fn [[p takes-val?]]
+            (when-let [v (js/url-param p)]
+              (if takes-val? [(str "--" p) v] [(str "--" p)])))
+          [["level" true] ["fps" true] ["seconds" true] ["glyphs" true]
+           ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
+           ["reset-progress" false]]))
+
+;; lg -w / -c evaluate the file while compiling; only run the game for real.
+(when-not *compiling-aot*
+  (game/main! (parse-args (if *in-wasm* (url-args) *command-line-args*))))

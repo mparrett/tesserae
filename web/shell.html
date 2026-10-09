@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TESSERAE</title>
+  <!-- lg -w -w-shell template: let-go's default xterm shell, plus a font size
+       picked so the grid reaches 124x50 (the doubled raster) when the window
+       allows it, and the WebGL renderer (the DOM renderer can't keep up with a
+       full-screen truecolor raster). -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{height:100%;height:100dvh;background:#000;color:#e8e6df;overflow:hidden}
+    body{display:flex;flex-direction:column}
+    #app{flex:1;min-height:0}
+    .xterm{height:100%}
+    #status{color:#5a584f;font-family:monospace;font-size:13px;padding:1rem;position:absolute;
+            top:50%;left:50%;transform:translate(-50%,-50%)}
+  </style>
+</head>
+<body>
+  <div id="status">loading TESSERAE...</div>
+  <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+  <script>
+__LG_HOST_JS_BODY_PLACEHOLDER__
+  </script>
+  <script>
+(function() {
+  const status = document.getElementById('status');
+  const termEl = document.getElementById('app');
+  const term = new Terminal({
+    fontFamily: '"DejaVu Sans Mono", "Menlo", "Consolas", monospace',
+    fontSize: 14,
+    theme: { background: '#000000', foreground: '#e8e6df' },
+    allowProposedApi: true,
+    convertEol: true,
+    scrollback: 0,
+    customGlyphs: true,       // pixel-exact block/quadrant glyphs, any font
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+
+  // Largest font that still gives the game its doubled raster (124x50);
+  // failing that, the largest that gives the minimum arena (76x24).
+  // ?grid=small skips the doubled raster: a quarter of the pixels per frame.
+  const small = new URLSearchParams(location.search).get('grid') === 'small';
+  function pickFont() {
+    let fallback = null;
+    for (let fs = 28; fs >= 7; fs--) {
+      term.options.fontSize = fs;
+      const d = fit.proposeDimensions();
+      if (!d) continue;
+      if (!small && d.cols >= 124 && d.rows >= 50 && fs >= 9) return fs;
+      if (fallback === null && d.cols >= 76 && d.rows >= 24) fallback = fs;
+    }
+    return fallback || 10;
+  }
+  function layout() { term.options.fontSize = pickFont(); fit.fit(); }
+
+  window.LetGoHost.onReady((mode) => {
+    if (status) status.style.display = 'none';
+    term.open(termEl);
+    try { term.loadAddon(new WebglAddon.WebglAddon()); window._tessRenderer = 'webgl'; }
+    catch (e) { window._tessRenderer = 'dom'; console.warn('webgl renderer unavailable', e); }
+    layout();
+    term.focus();
+    window.addEventListener('resize', layout);
+    window._tessTerm = term;
+    window.LetGoHost.onOutput((s) => term.write(s));
+    if (mode === 'worker') {
+      window.LetGoHost.setSize(term.cols, term.rows);
+      term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
+      term.onData((data) => window.LetGoHost.sendInput(data));
+    }
+  });
+})();
+  </script>
+</body>
+</html>

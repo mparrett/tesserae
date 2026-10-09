@@ -36,6 +36,37 @@ Each level has a par time. A clear at or under par earns gold (●), within 1.5�
 silver, otherwise bronze; a clear without losing a spark adds +500 and a ✦. The clear
 tally shows time against par, the medal, sets laid, the bonuses and new bests.
 
+## Browser build
+
+TESSERAE also runs in a browser tab, built with let-go's WASM target (`lg -w`) and
+shown in xterm.js.
+
+```sh
+./tools/serve-web.sh            # build dist/web, serve http://127.0.0.1:8360/
+NO_BUILD=1 ./tools/serve-web.sh 8361   # serve the existing build on another port
+./tools/build-web.sh [outdir]   # build only (default dist/web, about 1 min, behind tools/heavy.sh)
+node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check: screenshots + fps
+```
+
+![browser](docs/captures/v2-web-play.png)
+
+- `dist/web/index.html` is self-contained (about 8.5 MB, the program wasm is inlined)
+  apart from xterm.js, which loads from jsDelivr. The shell is `web/shell.html`, an
+  `-w-shell` template that picks the font size so the grid reaches 124x50 (the doubled
+  raster) when the window allows it, and uses xterm's WebGL renderer.
+- The page must be served cross-origin isolated (COOP/COEP headers). Otherwise the first
+  key read fails with "no SharedArrayBuffer". `tools/coi-serve.py` does this;
+  `python -m http.server` does not.
+- No command line in a browser, so play.sh's flags come from the URL:
+  `?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30&all`. The shell adds
+  `?grid=small`, which skips the doubled raster: a quarter of the pixels, roughly twice
+  the frame rate.
+- Progress isn't saved in the browser yet. let-go's browser storage needs
+  `localStorage`, and the VM runs in a Web Worker, which has none, so the title panel
+  says "progress not saved".
+- Ctrl-C and Q on the title screen don't quit, because a tab has nothing to quit to.
+  Resizing the window refits the grid, and the game re-lays out within half a second.
+
 ## Tests
 
 ```sh
