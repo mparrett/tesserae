@@ -2139,7 +2139,15 @@
                                       medal (str "● " (M/medal-name medal))
                                       :else "—"))
           (if (and done? medal) (M/medal-colour medal) 0xd8dcea))
-    (put! 5 (tally-line (if (= :build (:goal l)) "laid" "sets") (str (int (* f sets)))) 0xd8dcea)
+    (put! 5 (case (:goal l)
+              :build (tally-line "laid" (str (int (* f sets))))
+              (:clear :heart) (tally-line "sets" (str (int (* f sets))))
+              ;; goals where piece sets mean nothing name what was achieved
+              (tally-line "goal" (case (:goal l)
+                                   :lines "courses laid" :lamps "lamps lit"
+                                   :core "core broken" :orrery "machine taught"
+                                   "done")))
+          0xd8dcea)
     (put! 6 (tally-line "time bonus" (str "+" (int (* f bonus)))) 0xd8dcea)
     (put! 7 (tally-line "unbroken" (if flawless (str "+" (int (* f M/FLAWLESS-BONUS)) " ✦")
                                        (str "— " lost " lost")))
