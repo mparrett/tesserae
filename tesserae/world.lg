@@ -10,7 +10,7 @@
 ;; tile types
 (def EMPTY 0) (def NORM 1) (def HARD 2) (def WALL 3) (def GHOST 4) (def MITO 5)
 (def RUBBER 6) (def LEAD 7) (def MAGNET 8) (def PIT 9) (def LAMP 10) (def WARD 11)
-(def SETT 12)
+(def SETT 12) (def SHIELD 13) (def CORE 14)
 
 (def tt (int-array N))      ; type
 (def thits (int-array N))   ; hits left
@@ -212,7 +212,8 @@
 
 (def ^:private simple-legend
   {\H [HARD 0x8a94a8] \# [WALL 0x50565f] \+ [MITO 0x7cf2b0] \* [RUBBER 0xff4fa0]
-   \% [LEAD 0x7d8597] \@ [MAGNET 0xd03050] \x [PIT 0x101014] \$ [LAMP 0xc8962e]})
+   \% [LEAD 0x7d8597] \@ [MAGNET 0xd03050] \x [PIT 0x101014] \$ [LAMP 0xc8962e]
+   \= [SHIELD 0xa89c88] \C [CORE 0xff5a30]})
 
 (defn- pack-tetrominoes!
   "Fill every cell of grid g (a vector of row strings, mutable copy as

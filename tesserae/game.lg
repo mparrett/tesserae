@@ -96,6 +96,47 @@
   (assoc (new-ball 24.0 40.0 0.0 0.0 :spark) :stuck (rnd -1.5 1.5)))
 
 ;; ---------------------------------------------------------------------------
+;; the grout core (6.2), part 1: colours and core hits. Level keys:
+;;   :core {:hp n}   :shield {:rings [...] :regen s}   :neutral {:rows [y0 y1]}
+;;   :destroyer {:speed :fall :delay}   :swirl {:every :warn :speed}
+
+(defn hue
+  "Cheap rainbow: h in [0,1) around the wheel, v = brightness."
+  [h v]
+  (let [f (fn [o] (int (* 255.0 v (+ 0.5 (* 0.5 (math/cos (* TAU (- h o))))))))]
+    (gfx/rgb (f 0.0) (f 0.3333) (f 0.6667))))
+
+(defn core-colour [t hp hp0]
+  (let [rate (+ 3.0 (* 6.0 (- 1.0 (/ hp (max 1.0 hp0)))))]
+    (gfx/mix 0xff3a20 0xffd070 (+ 0.5 (* 0.5 (math/sin (* t rate)))))))
+
+(defn core-broken! []
+  (let [st @S]
+    (doseq [i (:core-tiles st)]
+      (let [[cx cy] (w/tile-center i)]
+        (w/clear! i)
+        (burst! cx cy 0xffd070 24 28.0)))
+    (doseq [r (:rings st) i (:path r)]
+      (when (= w/SHIELD (aget w/tt i))
+        (let [[cx cy] (w/tile-center i)]
+          (w/clear! i)
+          (burst! cx cy 0xa89c88 4 14.0))))
+    (add-score! 1000)
+    (swap! S assoc :dest nil :swirl nil :swirl-warn nil :stun 0.0)))
+
+(defn core-hit! [i]
+  (let [[cx cy] (w/tile-center i)]
+    (if (or (pos? (:core-cd @S)) (<= (:core-hp @S) 0))
+      (burst! cx cy 0xffb060 4 8.0)
+      (let [hp (dec (:core-hp @S))]
+        (swap! S assoc :core-hp hp :core-cd 0.3 :core-flash 0.25 :goal-dirty true
+               :regen-t (max (:regen-t @S 0.0) 4.0))   ; the core reels: no mending
+        (add-score! 150)
+        (float-text! cx cy (if (pos? hp) (str "CORE " hp) "CORE BROKEN") 0xffd070)
+        (burst! cx cy 0xffa040 18 20.0)
+        (when (<= hp 0) (core-broken!))))))
+
+;; ---------------------------------------------------------------------------
 ;; tile hits -> rules
 
 (defn piece-done! [i p types word bonus]
@@ -138,6 +179,10 @@
       (= t w/LAMP)
       (do (brk 50) (burst! cx cy 0xfff0a0 30 26.0)
           (float-text! cx cy "LIT" 0xfff0a0) nil)
+
+      (= t w/SHIELD) (do (brk 15) nil)
+
+      (= t w/CORE) (do (core-hit! i) nil)
 
       (= t w/GHOST)
       (do (w/set-ghost! i)
@@ -352,13 +397,14 @@
             :build (w/count-where #(= % w/GHOST))
             :lamps (w/count-where #(= % w/LAMP))
             :heart (w/count-where w/breakable?)
+            :core (max 0 (:core-hp @S 0))
             0)]
     (swap! S assoc :goal-left n :goal-dirty false)))
 
 (defn lodestones []
   (mapv w/tile-center (w/indices-where #(= % w/MAGNET))))
 
-(declare choose-ward!)
+(declare choose-ward! boss-init!)
 
 (defn spawn-balls! []
   (let [l (lvl) starts (:starts @S)]
@@ -385,6 +431,7 @@
             :decay-t (or (:decay l) 0.0)
             :time 0.0 :banner nil :banner-t 0.0
             :lodes (lodestones)})
+    (when (:core l) (boss-init! l))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
     (spawn-balls!)
@@ -485,6 +532,227 @@
         (+ x (* 2.2 (math/sin (* 0.7 (:time @S))))))
       24.0)))
 
+;; ---------------------------------------------------------------------------
+;; the grout core (6.2), part 2: shield, neutral zone, destroyer, swirl.
+;; The destroyer and the swirl live in the screen frame (where the trowel is);
+;; the shield and core are tiles; the neutral band is tinted background tiles.
+
+(defn nz-band
+  "Screen-frame y range [y0 y1) of the neutral zone, or nil."
+  []
+  (when-let [{[r0 r1] :rows} (lv :neutral)] [(* 2.0 r0) (* 2.0 (inc r1))]))
+
+(defn nz-tint! [i h]
+  (let [y (quot i w/G) b (gfx/mix (:bg0 (theme)) (:bg1 (theme)) (/ y 23.0))]
+    (aset w/bgc i (gfx/mix b (hue h 1.0) 0.32))))
+
+(defn boss-init! [l]
+  (let [cores (w/indices-where #(= % w/CORE))
+        cs (map w/tile-center cores)
+        n (max 1 (count cs))
+        rings (mapv (fn [r] (assoc r :path (mapv (fn [[x y]] (+ x (* y w/G))) (L/ring-path (:box r)))
+                                   :t (:step r)))
+                    (get-in l [:shield :rings]))]
+    (doseq [i cores] (aset w/tpiece i 9999))   ; one joined block
+    (doseq [r rings i (:path r)]
+      (when (= w/SHIELD (aget w/tt i)) (w/put! i w/SHIELD (:colour r))))
+    (when-let [{[r0 r1] :rows} (:neutral l)]
+      (doseq [y (range r0 (inc r1)) x (range w/G)]
+        (nz-tint! (+ x (* y w/G)) (+ (/ x 24.0) (* 0.15 y)))))
+    (doseq [i cores] (w/changed! i))
+    (swap! S assoc
+           :core-tiles cores
+           :core-c [(/ (reduce + (map first cs)) n) (/ (reduce + (map second cs)) n)]
+           :core-hp (get-in l [:core :hp] 6) :core-hp0 (get-in l [:core :hp] 6)
+           :core-cd 0.0 :core-flash 0.0
+           :rings rings :regen-t (get-in l [:shield :regen] 3.0)
+           :nz-t 0.0
+           :dest nil :dest-t (get-in l [:destroyer :delay] 3.0)
+           :swirl nil :swirl-warn nil :swirl-t (get-in l [:swirl :every] 12.0)
+           :stun 0.0)))
+
+(defn scroll-ring!
+  "Advance every shield cell one step along the ring. Only cells whose
+   occupancy changes are touched, through w/put! / w/clear!."
+  [{:keys [path dir colour]}]
+  (let [n (count path)
+        occ (mapv (fn [i] (= w/SHIELD (aget w/tt i))) path)]
+    (dotimes [j n]
+      (let [src (nth occ (mod (- j dir) n)) cur (nth occ j) i (nth path j)]
+        (cond (and src (not cur) (= w/EMPTY (aget w/tt i))) (w/put! i w/SHIELD colour)
+              (and cur (not src)) (w/clear! i)
+              :else nil)))))
+
+(defn ball-near? [i r]
+  (let [[cx cy] (w/tile-center i)]
+    (some (fn [b] (< (len (- (:x b) cx) (- (:y b) cy)) r)) (:balls @S))))
+
+(defn regen-shield! []
+  (let [cands (vec (for [r (:rings @S) :when (:regen r) i (:path r)
+                         :when (and (= w/EMPTY (aget w/tt i)) (not (ball-near? i 2.6)))]
+                     [i (:colour r)]))]
+    (when (seq cands)
+      (let [[i c] (rand-nth cands) [cx cy] (w/tile-center i)]
+        (w/put! i w/SHIELD c)
+        (burst! cx cy 0x8a8070 8 9.0)))))
+
+(defn swirl-hit! [sx]
+  (let [[wx wy] (gfx/s->w @scr sx PADDLE-Y)]
+    (burst! wx wy 0xff5030 34 26.0)
+    (let [st (swap! S update :lives dec)]
+      (if (<= (:lives st) 0)
+        (do (swap! S assoc :mode :over :mode-t 0.0)
+            (banner! "THE GROUT SETTLES" 0xff6070 99.0))
+        (banner! "SWIRLED · SPARK LOST" 0xff7080 1.6)))))
+
+(defn threat-window? [] (let [st @S] (boolean (or (:swirl st) (:swirl-warn st)))))
+
+(defn update-destroyer! [dt live?]
+  (let [cfg (lv :destroyer) sc @scr st @S d (:dest st)
+        px (:x (:paddle st)) hw (* 0.5 PADDLE-W)]
+    (if d
+      (let [sp (:speed cfg 7.0)
+            want (clampf (* 1.5 (- px (:x d))) (- sp) sp)
+            vx (+ (:vx d) (* (- want (:vx d)) (min 1.0 (* dt 2.5))))
+            x (clampf (+ (:x d) (* vx dt)) 1.0 47.0)
+            y (+ (:y d) (* (:fall cfg 5.0) dt))
+            [wx wy] (gfx/s->w sc x y)
+            shot (some (fn [b] (and (not (:stuck b)) (< (len (- (:x b) wx) (- (:y b) wy)) (+ BR 1.1))))
+                       (:balls st))
+            gone (fn [] (swap! S assoc :dest nil :dest-t (:delay cfg 3.0)))]
+        (cond
+          shot (do (burst! wx wy 0xc8a8ff 16 18.0) (add-score! 50)
+                   (float-text! wx wy "+50" 0xc8a8ff) (gone))
+          (and (>= y (- PADDLE-Y 0.9)) (<= y (+ PADDLE-Y 1.6)) (<= (math/abs (- x px)) (+ hw 0.9)))
+          (do (burst! wx wy 0xc8a8ff 14 14.0)
+              (when-not (threat-window?)
+                (swap! S assoc :stun 1.0)
+                (float-text! wx (- wy 2.0) "STUNNED" 0xffe070))
+              (gone))
+          (> y 49.0) (gone)
+          :else (swap! S assoc :dest (assoc d :x x :y y :vx vx))))
+      (when live?
+        (let [t (- (:dest-t st) dt)]
+          (if (<= t 0.0)
+            (let [[cx cy] (:core-c st) [sx sy] (gfx/w->s sc cx cy)]
+              (burst! cx cy 0xc8a8ff 10 10.0)
+              (swap! S assoc :dest {:x sx :y (+ sy 2.0) :vx 0.0}))
+            (swap! S assoc :dest-t t)))))))
+
+(defn update-swirl! [dt live?]
+  (let [cfg (lv :swirl) sc @scr st @S
+        px (:x (:paddle st)) hw (* 0.5 PADDLE-W)]
+    (cond
+      (:swirl st)
+      (let [sw (:swirl st)
+            x (+ (:x sw) (* (:vx sw) dt)) y (+ (:y sw) (* (:vy sw) dt))
+            line (- PADDLE-Y 0.6)
+            done (fn [] (swap! S assoc :swirl nil :swirl-t (:every cfg 12.0)))]
+        (cond
+          (and (< (:y sw) line) (>= y line) (<= (math/abs (- x px)) (+ hw 0.7)))
+          (do (done) (swirl-hit! x))
+          (> y 49.0) (let [[wx wy] (gfx/s->w sc x 47.5)]
+                       (burst! wx wy 0xff7040 12 14.0) (done))
+          :else (swap! S assoc :swirl (assoc sw :x x :y y :spin (+ (:spin sw) (* 14.0 dt))))))
+
+      (:swirl-warn st)
+      (let [t (- (:swirl-warn st) dt)]
+        (if (> t 0.0)
+          (swap! S assoc :swirl-warn t)
+          (let [[cx cy] (:core-c st) [sx sy] (gfx/w->s sc cx cy)
+                dx (- px sx) dy (- PADDLE-Y sy) d (len dx dy) sp (:speed cfg 36.0)]
+            (swap! S assoc :swirl-warn nil
+                   :swirl {:x sx :y sy :vx (* sp (/ dx d)) :vy (* sp (/ dy d)) :spin 0.0 :tx px}))))
+
+      live?
+      (let [t (- (:swirl-t st) dt)]
+        (if (and (<= t 0.0) (<= (:stun st) 0.0))
+          (do (swap! S assoc :swirl-warn (:warn cfg 1.2))
+              (banner! "THE CORE GATHERS" 0xff6040 (:warn cfg 1.2)))
+          (swap! S assoc :swirl-t t)))
+      :else nil)))
+
+(defn update-neutral! [dt]
+  (let [[y0 y1] (nz-band) sc @scr {[r0 r1] :rows} (lv :neutral) t (:time @S)
+        nt (- (:nz-t @S) dt)]
+    ;; shimmer: recolour a few band tiles at a time (cheap; they re-cache)
+    (if (<= nt 0.0)
+      (do (dotimes [_ 5]
+            (let [x (rand-int w/G) y (+ r0 (rand-int (inc (- r1 r0)))) i (+ x (* y w/G))]
+              (nz-tint! i (+ (/ x 24.0) (* 0.4 t) (rnd -0.12 0.12)))
+              (w/changed! i)))
+          (swap! S assoc :nz-t 0.06))
+      (swap! S assoc :nz-t nt))
+    ;; a Spark crossing into the band takes a random spin and a rainbow trail
+    (swap! S update :balls
+           (fn [bs]
+             (mapv (fn [b]
+                     (if (:stuck b) b
+                         (let [[_ sy] (gfx/w->s sc (:x b) (:y b))
+                               in? (and (>= sy y0) (< sy y1))
+                               rb (max 0.0 (- (:rainbow b 0.0) dt))]
+                           (cond
+                             (and in? (not (:nz b)))
+                             (let [a (* (if (< (rand) 0.5) -1.0 1.0) (rnd 0.12 0.32))
+                                   c (math/cos a) s (math/sin a)]
+                               (assoc b :nz true :rainbow 1.8
+                                      :vx (- (* c (:vx b)) (* s (:vy b)))
+                                      :vy (+ (* s (:vx b)) (* c (:vy b)))))
+                             (and (not in?) (:nz b)) (assoc b :nz false :rainbow rb)
+                             :else (assoc b :rainbow rb)))))
+                   bs)))))
+
+(defn update-boss! [dt]
+  (let [st @S t (:time st)
+        live? (and (seq (:balls st)) (not-any? :stuck (:balls st)))]
+    (swap! S assoc
+           :core-cd (max 0.0 (- (:core-cd st) dt))
+           :core-flash (max 0.0 (- (:core-flash st) dt))
+           :stun (max 0.0 (- (:stun st) dt)))
+    ;; the core pulses; faster as it weakens, white on a hit, strobing on a warning
+    (when (pos? (:core-hp st))
+      (let [warn (:swirl-warn st)
+            c (cond (pos? (:core-flash st)) 0xffffff
+                    warn (if (even? (int (* 10.0 warn))) 0xffffff 0xff2010)
+                    :else (core-colour t (:core-hp st) (:core-hp0 st)))]
+        (doseq [i (:core-tiles st)]
+          (aset w/tbase i c) (aset w/tdot i (gfx/mix c 0xffffff 0.45))
+          (aset w/thl i (gfx/mix c 0xffffff 0.6)) (aset w/tsh i (gfx/scale c 0.55))
+          (w/changed! i))))
+    ;; the shield scrolls and mends
+    (swap! S update :rings
+           (fn [rs] (mapv (fn [r] (let [rt (- (:t r) dt)]
+                                    (if (<= rt 0.0)
+                                      (do (scroll-ring! r) (assoc r :t (+ rt (:step r))))
+                                      (assoc r :t rt))))
+                          rs)))
+    (when (lv :shield)
+      (let [rt (- (:regen-t @S) dt)]
+        (if (<= rt 0.0)
+          (do (regen-shield!) (swap! S assoc :regen-t (get-in (lvl) [:shield :regen] 3.0)))
+          (swap! S assoc :regen-t rt))))
+    (when (lv :neutral) (update-neutral! dt))
+    (when (lv :destroyer) (update-destroyer! dt live?))
+    (when (lv :swirl) (update-swirl! dt live?))))
+
+(defn boss-dodge
+  "Autopilot: step out from under the swirl and the destroyer."
+  [x]
+  (let [st @S hw (* 0.5 PADDLE-W)
+        away (fn [x hx gap]
+               (if (< (math/abs (- x hx)) gap)
+                 (let [l (- hx gap 1.0) r (+ hx gap 1.0)]
+                   (if (or (> r (- 48.0 hw)) (and (>= l hw) (< x hx))) l r))
+                 x))
+        x (if-let [sw (:swirl st)]
+            (let [tt (/ (- PADDLE-Y (:y sw)) (max 1.0 (:vy sw)))]
+              (away x (+ (:x sw) (* (:vx sw) tt)) (+ hw 2.5)))
+            x)
+        x (if-let [d (:dest st)]
+            (if (> (:y d) 34.0) (away x (:x d) (+ hw 2.0)) x)
+            x)]
+    x))
+
 (defn update-paddle! [dt]
   (let [p (:paddle @S)
         hw (* 0.5 PADDLE-W)
@@ -492,7 +760,7 @@
         mx @in/mouse-x
         sc @scr
         target (cond
-                 auto? (autopilot)
+                 auto? (if (lv :core) (boss-dodge (autopilot)) (autopilot))
                  (and @in/mouse-moved mx) (/ (- mx (:ox sc) -0.5) (:k sc))
                  :else nil)
         ax (in/axis [:left :a :h] [:right :d :l])
@@ -500,6 +768,7 @@
             (clampf (* 14.0 (- target (:x p))) -110.0 110.0)
             (let [want (* ax 62.0)]
               (+ (:v p) (* (- want (:v p)) (min 1.0 (* dt 22.0))))))
+        v (if (pos? (:stun @S 0.0)) 0.0 v)
         x (clampf (+ (:x p) (* v dt)) hw (- 48.0 hw))
         v (if (or (= x hw) (= x (- 48.0 hw))) 0.0 v)]
     (when (not= 0 ax) (reset! in/mouse-moved false))
@@ -546,8 +815,9 @@
         bonus (+ 500 (max 0 (int (- 1500 (* 10 secs)))))]
     (add-score! bonus)
     (release-ward!)
-    (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus)
-    (banner! "MOSAIC RESTORED" 0xfff2a0 3.0)))
+    (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus
+           :dest nil :swirl nil :swirl-warn nil :stun 0.0)
+    (banner! (if (lv :core) "THE CORE IS BROKEN" "MOSAIC RESTORED") 0xfff2a0 3.0)))
 
 (defn step-world! [dt]
   (let [open (open-sides)
@@ -646,6 +916,7 @@
   (when (and (:autoplay @opts) (some :stuck (:balls @S)) (> (:time @S) 0.8)) (launch!))
   (when (neg? (:li @S)) (when (some :stuck (:balls @S)) (launch!)))
   (update-balls-frame! dt)
+  (when (lv :core) (update-boss! dt))
   (step-world! dt)
   (when (:goal-dirty @S) (recount-goal!))
   (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
@@ -656,15 +927,55 @@
 ;; ---------------------------------------------------------------------------
 ;; rendering
 
+(defn draw-boss!
+  "The Grout Core's moving parts: neutral sparkle, warning, destroyer, swirl."
+  [sc st t]
+  (let [px (:x (:paddle st))]
+    ;; neutral zone: a few rainbow sparks per frame on top of the tinted band
+    (when-let [[y0 y1] (nz-band)]
+      (dotimes [_ 3]
+        (let [[wx wy] (gfx/s->w sc (rnd 0.0 48.0) (rnd y0 y1))]
+          (gfx/glow! sc wx wy 1.2 0.3 (hue (rand) 1.0) 0.55))))
+    ;; swirl warning: the core gathers light and a reticle locks onto the trowel
+    (when-let [warn (:swirl-warn st)]
+      (let [[cx cy] (:core-c st)
+            f (- 1.0 (/ warn (:warn (lv :swirl) 1.2)))
+            [rx ry] (gfx/s->w sc px (- PADDLE-Y 2.2))
+            blink? (even? (int (* 10.0 warn)))]
+        (gfx/glow! sc cx cy (+ 3.0 (* 4.0 f)) 1.0 0xff4020 (+ 0.25 (* 0.4 f)))
+        (gfx/glow! sc rx ry 2.4 0.6 0xff3020 (if blink? 0.9 0.35))
+        (gfx/world-text! sc cx (+ cy 9.5) "!! SWIRL !!" (if blink? 0xffe070 0xff4030))))
+    ;; the swirl itself: a hot core with three orbiting sparks
+    (when-let [sw (:swirl st)]
+      (let [[wx wy] (gfx/s->w sc (:x sw) (:y sw)) a (:spin sw)]
+        (gfx/glow! sc wx wy 2.6 0.8 0xffe0a0 1.0)
+        (dotimes [j 3]
+          (let [b (+ a (* j 2.094))]
+            (gfx/glow! sc (+ wx (* 1.6 (math/cos b))) (+ wy (* 1.6 (math/sin b))) 1.3 0.35 0xff4020 0.9)))))
+    ;; the destroyer: a slow violet mote with a wobbling tail
+    (when-let [d (:dest st)]
+      (let [[wx wy] (gfx/s->w sc (:x d) (:y d))
+            [tx ty] (gfx/s->w sc (+ (:x d) (* 0.8 (math/sin (* 9.0 t)))) (- (:y d) 1.4))
+            c (gfx/mix 0xa070ff 0xffffff (+ 0.5 (* 0.5 (math/sin (* 12.0 t)))))]
+        (gfx/glow! sc tx ty 1.4 0.3 0x7040c0 0.6)
+        (gfx/glow! sc wx wy 2.4 0.6 c 1.0)))
+    ;; a stunned trowel throws sparks
+    (when (pos? (:stun st))
+      (let [[wx wy] (gfx/s->w sc (+ px (rnd -4.5 4.5)) (- PADDLE-Y (rnd 0.2 1.5)))]
+        (gfx/glow! sc wx wy 1.0 0.25 0xffe070 0.8)))))
+
 (defn draw-arena! [^StringBuilder sb]
   (let [sc @scr st @S t (:time st)]
     ;; balls: trail then core
     (doseq [b (:balls st)]
       (let [c (get mat-color (:mat b) 0xffd27a)
-            tr (:trail b) n (count tr)]
+            tr (:trail b) n (count tr)
+            rb? (pos? (:rainbow b 0.0))]
         (dotimes [j (dec n)]
           (let [[x y] (nth tr j) f (/ (inc j) (* 1.0 n))]
-            (gfx/glow! sc x y 1.4 0.4 c (* 0.22 f))))
+            (if rb?
+              (gfx/glow! sc x y 1.6 0.5 (hue (+ (* 0.18 j) (* 1.5 t)) 1.0) (* 0.45 f))
+              (gfx/glow! sc x y 1.4 0.4 c (* 0.22 f)))))
         (gfx/glow! sc (:x b) (:y b) 3.4 BR c 1.0)))
     ;; lodestone shimmer
     (doseq [[x y] (:lodes st)]
@@ -674,6 +985,7 @@
     (when (and (lv :ward) (>= (:ward st) 0))
       (let [[x y] (w/tile-center (:ward st))]
         (gfx/glow! sc x y 4.5 0.0 0xffe0e8 (+ 0.35 (* 0.2 (math/sin (* 7.0 t)))))))
+    (when (and (lv :core) (= :play (:mode st))) (draw-boss! sc st t))
     ;; particles
     (doseq [p (:parts st)]
       (gfx/glow! sc (:x p) (:y p) 1.1 0.35 (:c p) (/ (:life p) (:max p))))
@@ -681,7 +993,9 @@
     (when (paddle-level?)
       (let [px (:x (:paddle st)) hw (* 0.5 PADDLE-W)
             mag? (pos? (:mag-t st))
-            c (if mag? (gfx/mix 0xff6a8a 0xffffff (* 0.5 (+ 1 (math/sin (* 20 t))))) 0xcfe9ff)]
+            c (cond mag? (gfx/mix 0xff6a8a 0xffffff (* 0.5 (+ 1 (math/sin (* 20 t)))))
+                    (pos? (:stun st 0.0)) (if (even? (int (* 14 t))) 0x5a6070 0xa8b0c0)
+                    :else 0xcfe9ff)]
         (gfx/rect! sc (- px hw) PADDLE-Y (+ px hw) (+ PADDLE-Y 1.0) c)
         (when (lv :twin)
           (gfx/rect! sc (- px hw) (- TOP-Y 1.0) (+ px hw) TOP-Y c))
@@ -717,11 +1031,14 @@
       (gfx/fg! sb c)
       (.append sb s))))
 
+(def level-keys "1234567890-")
+(defn level-key-label [j] (if (< j (count level-keys)) (subs level-keys j (inc j)) " "))
+
 (defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
 
 (defn controls []
   (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0    jump to level" "Q      quit"]
+    (neg? (:li @S)) ["SPACE  begin" "1-0 -  jump to level" "Q      quit"]
     (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
     (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
     (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
@@ -731,7 +1048,8 @@
   (let [sc @scr st @S l (lvl) top (:oy sc) acc (:accent (theme))
         title? (neg? (:li st))
         r (fn [i] (+ top i))
-        goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left" "")
+        goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
+                    :core "core hits" "")
         [fps cells bytes] @fps-stat]
     (panel-line! sb (r 0) "T E S S E R A E" acc)
     (panel-line! sb (r 1) "──────────────────────" 0x404660)
@@ -739,8 +1057,7 @@
       (do (panel-line! sb (r 2) "a mosaic breaker" 0x9098b0)
           (panel-line! sb (r 3) "" 0)
           (doseq [[j lv] (map-indexed vector L/levels)]
-            (panel-line! sb (r (+ 4 j)) (str (mod (inc j) 10) "  " (:id lv) " " (:name lv)) 0xb0b8d0))
-          (panel-line! sb (r 14) "" 0)
+            (panel-line! sb (r (+ 4 j)) (str (level-key-label j) "  " (:id lv) " " (:name lv)) 0xb0b8d0))
           (panel-line! sb (r 15) (str "best  " (:best st 0)) 0x808aa0))
       (do (panel-line! sb (r 2) (:chapter l) acc)
           (panel-line! sb (r 3) (str (:id l) "  " (:name l)) 0xe8ecf8)
@@ -753,12 +1070,22 @@
           (panel-line! sb (r 10)
                        (cond (:rot st) "↻ TURNING"
                              (:rotate l) (str "↻ turn in " (int (math/ceil (:rot-timer st))) "s")
+                             (:swirl-warn st) "!! SWIRL · MOVE !!"
+                             (:swirl st) "!! SWIRL INBOUND"
+                             (pos? (:stun st 0.0)) "✶ TROWEL STUNNED"
+                             (:swirl l) (if (some :stuck (:balls st)) "the core waits"
+                                            (str "swirl in " (int (math/ceil (:swirl-t st))) "s"))
                              (:ward l) (str "tile lent for " (int (math/ceil (:ward-t st))) "s")
                              (:decay l) (str "grout creeps " (int (math/ceil (:decay-t st))) "s")
                              (:magnet l) (if (pos? (:mag-cd st)) "magnet charging" "magnet READY")
                              (:tilt l) (let [[a c] (:tilt st)] (format "tilt %+.1f %+.1f" a c))
                              :else "")
-                       (if (and (:rotate l) (< (:rot-timer st) 3.0)) 0xffe070 acc))
+                       (cond (and (:rotate l) (< (:rot-timer st) 3.0)) 0xffe070
+                             (or (:swirl-warn st) (:swirl st))
+                             (if (even? (int (* 8 (:time st)))) 0xff4030 0xffe070)
+                             (pos? (:stun st 0.0)) 0xffe070
+                             (and (:swirl l) (< (:swirl-t st 99.0) 3.0)) 0xffa060
+                             :else acc))
           (panel-line! sb (r 11) (str "time    " (int (:time st)) "s") 0x808aa0)))
     (let [cs (controls)]
       (doseq [[j s] (map-indexed vector cs)]
@@ -899,8 +1226,10 @@
                          (card-done!)))
       title? (cond (contains? #{:q :esc} k) (reset! quit? true)
                    (contains? #{:space :enter :click} k) (new-game! 0)
-                   (and (keyword? k) (re-matches #"[0-9]" (name k)))
-                   (let [n (parse-long (name k))] (new-game! (if (zero? n) 9 (dec n)))))
+                   (and (keyword? k) (= 1 (count (name k))))
+                   (let [j (str/index-of level-keys (name k))]
+                     (when (and j (< j (count L/levels))) (new-game! j)))
+                   :else nil)
       (= mode :over) (cond (contains? #{:space :enter} k)
                            (do (swap! S assoc :lives 5 :score (quot (:score st) 2))
                                (enter-level! (:li st)))
