@@ -240,3 +240,10 @@ one conflict, in the ball draw call, and both sides were kept.
   everything else in gfx and world (`sample`, `glow!`, `ball!`, `shape-disc!`, `rect!`,
   colour helpers), and `compose!` stays on the VM. That keeps most of the win (sampling and
   sprites were 2.5–3×) without the hour-long build.
+- **result (AOT with `compose!` skipped, same quiet box):** `sample` 25 → 15 ms per 10k,
+  `glow!` 0.47 → 0.26 ms, cache rebuild 70 → 42 ms, coarse rotated frame 47 → 39 ms. The full
+  rotated frame is unchanged (66 vs 69 ms) and idle compose is slightly slower: each VM↔native
+  crossing (`compose!` calling native `post`/`rgb`) costs about what the native helper saves.
+  So the AOT binary now only pays on sprite-heavy frames. It stays optional, and the real
+  speedup waits on the typeinfer fix that would let `compose!` lower again (the earlier build
+  measured 71 → 32 ms).
