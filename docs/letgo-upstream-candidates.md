@@ -1,8 +1,8 @@
 # let-go upstream candidates found while building TESSERAE
 
-These are local notes only. Nothing here has been filed or posted. Before anything goes
-upstream it goes through the joint-xsofy `upstream-outbound` pipeline: search for existing
-issues, run the review rubric, draft in `docs-xsofy/outbound/`, then a human pass.
+Working notes on let-go gaps hit while building the game. Filed so far: the AOT lowering
+blowup as nooga/let-go#1050, with the fix in nooga/let-go#1051. The rest are unfiled
+candidates.
 
 Verified against `lg` built from nooga/let-go `a13e042` (2026-10-09).
 
@@ -31,8 +31,8 @@ Workarounds in the game: nested `bit-or`, `math/*` everywhere, `.toString`, and
 
 ## AOT lowering (`benchmark/aot` pipeline applied to a real app)
 
-These are on local branch `wt/tesserae-aot` in `~/projects-new/worktrees/let-go-tesserae-aot`.
-They are not pushed and have no upstream PR.
+These are on a local let-go branch (`wt/tesserae-aot`), not pushed and with no upstream PR
+of their own.
 
 - `a8c24ea fix(ir)`, two fixes (**part 1 is superseded by upstream #1044**, which fixes the
   same `trampoline-call-stmts` site with a checked assert and also covers the guarded
@@ -46,8 +46,8 @@ They are not pushed and have no upstream PR.
      (`rt.InvokeGoOverrideFallback`).
 - `f01a7cd perf(ir)`: lowered code caches global var lookups (`rt.CachedVar`) instead of doing
   a namespace map lookup on every read.
-- **ROOT-CAUSED (2026-10-09): exponential `closure-info*` walk in Go emission, a regression
-  from #767.** The 18 min → over 95 min `compose!` lowering isn't typeinfer. Typeinfer is
+- **ROOT-CAUSED (2026-10-09), filed as #1050, fix in #1051: exponential `closure-info*` walk
+  in Go emission, a regression from #767.** The 18 min → over 95 min `compose!` lowering isn't typeinfer. Typeinfer is
   healthy: about 2.1 enqueues per instruction (the #558 baseline), the same work counts on
   base, tip and tip+#1038/#1039, and 8–17 s total even on `compose!`. The time is in
   `ir.lower-go/closure-info*` (lower_go.lg:758 at a13e042, identical at tip 49858bd).
@@ -69,9 +69,8 @@ They are not pushed and have no upstream PR.
     byte-identical Go wherever stock finishes. Not yet checked against let-go's #766/#767
     regression tests. Further ideas: skip the walk for params typeinfer proved scalar, and
     stop licm threading rematerialisable constants through every block.
-  - **Write-up and scripts:** `tools/typeinfer-repro/README.md` on branch
-    `wip/typeinfer-repro` (5125bbe, private remote). The experimental fix is
-    `lower-one.lg` with `CLOSURE_FIXPOINT=1`.
+  - **Write-up:** the repro scripts were kept locally; #1050 carries a standalone repro and
+    #1051 the fix with tests.
   - Minor, uncaused: typeinfer time per drain rises about 1.8× over a 13× size range (a small
     #558-class effect, about 7 s of the hour).
 - **Observation:** the lowerer guesses `:int` for params used in arithmetic, so float params

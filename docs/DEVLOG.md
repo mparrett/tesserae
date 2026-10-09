@@ -26,8 +26,8 @@ ball where you control one tile.
   rides the auto-repeat: 150 ms for a fresh press, 110 ms per repeat. SGR any-motion mouse
   (1003) gives analog trowel control. let-go's decoder drops the motion bit, but motion still
   arrives as `:button :none` presses, so no let-go change was needed.
-- **decision: repo.** Started as a new sibling repo `~/projects-new/tesserae`. Moved to a
-  private GitHub remote (`mparrett/tesserae`) on request.
+- **decision: repo.** Started as a new standalone repo next to the let-go and xsofy
+  checkouts, then pushed to GitHub (`mparrett/tesserae`) on request.
 - **surprise: let-go gaps** (upstream candidates, logged in PLAN.md):
   - `bit-or` takes exactly 2 args.
   - `Math/PI`, `Math/sin` and `Math/cos` are unresolved, while `Math/sqrt` and `Math/abs`
@@ -68,7 +68,7 @@ ball where you control one tile.
 
   The catch is that one rebuild takes about 18 minutes, nearly all of it typeinfer reaching a
   fixpoint on `compose!` (an upstream candidate). So `./play.sh` defaults to the VM, and
-  `LG=~/projects-new/lg-bin/lg-tesserae-aot ./play.sh` uses the fast binary. Rebuild it after
+  `LG=<path to lg-tesserae-aot> ./play.sh` uses the fast binary. Rebuild it after
   gfx/world changes, through `tools/heavy.sh`.
 - **decision: semaphore.** `tools/heavy.sh` puts a machine-wide `flock` around CPU-heavy jobs
   (AOT builds, Go builds, long captures), so only one runs at a time on this 4-vCPU box, and
@@ -302,7 +302,7 @@ one conflict, in the ball draw call, and both sides were kept.
   43–54 ms). No reason to move the pin before the playtest. The changes that matter for us
   are in lowering, which the repro agent is A/B-ing (base vs tip vs tip + open #1039/#1038).
 - **surprise:** `lg-at.sh` at tip fails the smoke boot budget on this box. Needs
-  `env 'SMOKE-BOOT-BUDGET-MS=60'` (already noted in the devbox memory).
+  `env 'SMOKE-BOOT-BUDGET-MS=60'` on this machine.
 
 ## 2026-10-09: stretch spike, a 3D tilt table (user request)
 
@@ -363,6 +363,6 @@ one conflict, in the ball draw call, and both sides were kept.
 - **process note:** the user's memory of an older "~100× slower typeinfer" pointed at #558
   (type writes path-copying the inst spine). Classifying against it (enqueues per inst vs
   time per enqueue) is what ruled typeinfer out quickly.
-- Details in `docs/letgo-upstream-candidates.md`, and the full write-up is on branch
-  `wip/typeinfer-repro` (private remote). Nothing posted upstream; that goes through the
-  upstream-outbound pipeline after the debrief.
+- Details in `docs/letgo-upstream-candidates.md`. Filed afterwards as nooga/let-go#1050 with a
+  standalone repro, and fixed in nooga/let-go#1051 (one fixpoint per function instead of a
+  walk per query; lowering `compose!` drops from over an hour to under a minute).

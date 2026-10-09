@@ -1,4 +1,4 @@
-# Copied from joint-xsofy local-scripts/coi-serve.py (static server with COOP/COEP,
+# Adapted from the xsofy workspace's coi-serve.py (static server with COOP/COEP,
 # so the page is crossOriginIsolated and lg's SharedArrayBuffer input ring works).
 import http.server, sys, os
 
