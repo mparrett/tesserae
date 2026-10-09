@@ -801,25 +801,59 @@
     (when (not= 0 ax) (reset! in/mouse-moved false))
     (swap! S assoc :paddle {:x x :v v})))
 
+(defn tilt-path
+  "BFS over tiles from (x,y) to the nearest lamp, around walls and pits
+   (breakable tiles count as passable: the marble knocks them loose).
+   Returns the tile index sequence or nil."
+  [x y]
+  (let [G w/G
+        start (+ (int (* 0.5 x)) (* G (int (* 0.5 y))))
+        prev (int-array w/N)]
+    (dotimes [i w/N] (aset prev i -2))
+    (aset prev start -1)
+    (loop [q (conj clojure.lang.PersistentQueue/EMPTY start)]
+      (when-let [i (peek q)]
+        (if (= w/LAMP (aget w/tt i))
+          (loop [j i acc ()] (if (= j -1) (vec acc) (recur (aget prev j) (cons j acc))))
+          (let [cx (mod i G) cy (quot i G)
+                nbrs (for [[dx dy] [[1 0] [-1 0] [0 1] [0 -1]]
+                           :let [nx (+ cx dx) ny (+ cy dy) j (+ nx (* ny G))]
+                           :when (and (>= nx 0) (< nx G) (>= ny 0) (< ny G)
+                                      (= -2 (aget prev j))
+                                      (let [t (aget w/tt j)]
+                                        (not (or (= t w/WALL) (= t w/PIT)))))]
+                       j)]
+            (doseq [j nbrs] (aset prev j i))
+            (recur (into (pop q) nbrs))))))))
+
+(defn tilt-bot
+  "Autoplay tilt: follow the BFS path a couple of tiles ahead with a
+   velocity controller (slow and careful near pits)."
+  [b]
+  (let [st @S
+        path (if (and (:tpath st) (< (- (:time st) (:tpath-t st 0.0)) 0.3))
+               (:tpath st)
+               (let [p (tilt-path (:x b) (:y b))]
+                 (swap! S assoc :tpath p :tpath-t (:time st))
+                 p))]
+    (if (and path (> (count path) 1))
+      (let [[wx wy] (w/tile-center (nth path (min 2 (dec (count path)))))
+            dx (- wx (:x b)) dy (- wy (:y b)) d (max 0.5 (len dx dy))
+            want 7.0
+            dvx (- (* want (/ dx d)) (:vx b)) dvy (- (* want (/ dy d)) (:vy b))]
+        [(clampf (/ dvx 6.0) -1.0 1.0) (clampf (/ dvy 6.0) -1.0 1.0)])
+      [0.0 0.0])))
+
 (defn update-tilt! [dt]
   (let [ax (in/axis [:left :a :h] [:right :d :l])
         ay (in/axis [:up :w :k] [:down :s :j])
         [tx ty] (:tilt @S)
-        auto? (:autoplay @opts)
-        [ax ay] (if auto?
-                  (let [b (first (:balls @S))
-                        lamps (w/indices-where #(= % w/LAMP))]
-                    (if (and b (seq lamps))
-                      (let [i (apply min-key (fn [i] (let [[x y] (w/tile-center i)]
-                                                       (len (- x (:x b)) (- y (:y b)))))
-                                     lamps)
-                            [x y] (w/tile-center i)]
-                        [(math/signum (- x (:x b))) (math/signum (- y (:y b)))])
-                      [0 0]))
-                  [ax ay])
-        rate (* 2.5 dt)
-        mv (fn [cur a] (clampf (+ cur (* a rate)) -1.0 1.0))]
-    (swap! S assoc :tilt [(mv tx ax) (mv ty ay)])))
+        b (first (:balls @S))]
+    (if (and (:autoplay @opts) b)
+      (swap! S assoc :tilt (tilt-bot b))
+      (let [rate (* 2.5 dt)
+            mv (fn [cur a] (clampf (+ cur (* a rate)) -1.0 1.0))]
+        (swap! S assoc :tilt [(mv tx ax) (mv ty ay)])))))
 
 (defn lose-ball! [b]
   (let [[sx sy] (gfx/w->s @scr (:x b) (:y b))]
