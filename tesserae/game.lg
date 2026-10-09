@@ -24,7 +24,8 @@
 (def PANEL-W 26)
 (def TAU (* 2.0 math/PI))
 
-(def mat-color {:spark 0xffd27a :rubber 0xff5fb0 :lead 0x9fb4d8 :marble 0xdfe8ff})
+(def mat-color {:spark 0xffd27a :rubber 0xff5fb0 :lead 0x9fb4d8 :marble 0xdfe8ff
+                :glass 0xc4f6ff :ghost 0xb8b0ff})
 
 ;; ---------------------------------------------------------------------------
 ;; state
@@ -144,6 +145,9 @@
 ;; ---------------------------------------------------------------------------
 ;; tile hits -> rules
 
+(declare well-hit! well-init! update-well! well-aim draw-well-panel!)
+(def hit-ctx (atom [1 0.0]))   ; [axis velocity] of the ball whose hit is being resolved
+
 (defn piece-done! [i p types word bonus]
   (do
     (when (and (pos? p) (zero? (w/piece-left p types)))
@@ -171,10 +175,12 @@
               (burst! cx cy c 9 14.0)
               (swap! S assoc :goal-dirty true))]
     (cond
-      (or (= t w/NORM) (= t w/RUBBER) (= t w/LEAD) (= t w/MITO))
+      (or (= t w/NORM) (= t w/RUBBER) (= t w/LEAD) (= t w/MITO) (= t w/GLASS) (= t w/WISP))
       (do (brk 10)
           (when (= t w/NORM) (piece-done! i piece #{w/NORM} "SET" 100))
-          (case t 5 :split 6 :rubber 7 :lead nil))
+          (case t 5 :split 6 :rubber 7 :lead 16 :glass 17 :ghost nil))
+
+      (= t w/MORTAR) (do (well-hit! i) nil)
 
       (or (= t w/HARD) (= t w/MAGNET))
       (if (> (aget w/thits i) 1)
@@ -223,7 +229,15 @@
                               (let [t (w/tile-at tx ty)]
                                 (if (w/solid-type? t) (conj (or acc []) (+ tx (* ty w/G))) acc))))))))))
 
-(def pierceable #{1 2 5 6 7 10})
+(def pierceable #{1 2 5 6 7 10 16 17})
+
+(defn ghost-break!
+  "A ghost Spark breaks a breakable tile outright (no cracking, no bounce)."
+  [i]
+  (loop [n 0 fx nil]
+    (if (and (< n 4) (w/breakable? (aget w/tt i)))
+      (recur (inc n) (or (hit-tile! i) fx))
+      fx)))
 
 (defn- axis-move
   "Move ball along one axis (0 = x, 1 = y). Returns updated ball; collects
@@ -236,12 +250,17 @@
     (if (nil? hits)
       nb
       (let [lead? (and (= :lead (:mat b)) (every? #(contains? pierceable (aget w/tt %)) hits))
-            effects (doall (map hit-tile! hits))
+            ghost? (and (= :ghost (:mat b)) (every? #(w/breakable? (aget w/tt %)) hits))
+            _ (reset! hit-ctx [axis (get b kv)])
+            effects (doall (map (if ghost? ghost-break! hit-tile!) hits))
             b (update b :fx into (remove nil? effects))]
-        (if lead?
-          nb
-          (let [rest (if (lv :tilt) 0.55 1.0)]
-            (assoc b kv (* -1.0 rest (get b kv)))))))))
+        (cond
+          lead? nb
+          ghost? (let [n (- (:ghost-n b 3) (count hits))
+                       gb (assoc b kp np :ghost-n n)]
+                   (if (<= n 0) (assoc gb :mat :spark) gb))
+          :else (let [rest (if (lv :tilt) 0.55 1.0)]
+                  (assoc b kv (* -1.0 rest (get b kv)))))))))
 
 (defn- walls
   "World boundary: reflect on closed sides."
@@ -281,7 +300,8 @@
                    (swap! S assoc :combo 0)
                    (if (and mag? (neg? dir))
                      (assoc b :x wx :y wy :vx 0.0 :vy 0.0 :stuck (- sx px))
-                     (assoc b :x wx :y wy :vx wvx :vy wvy))))]
+                     (let [nb (assoc b :x wx :y wy :vx wvx :vy wvy)]
+                       (if (= :glass (:mat b)) (update nb :fx (fnil conj []) :shatter) nb)))))]
     (cond
       (and (pos? svy) (>= (+ sy BR) PADDLE-Y) (<= (- sy BR) (+ PADDLE-Y 1.0))
            (<= (math/abs (- sx px)) (+ hw BR)))
@@ -389,6 +409,21 @@
                            (cons (assoc b :mat :rubber) (rest bs)))
                :lead (do (float-text! (:x b) (:y b) "LEAD" 0x9fb4d8)
                          (cons (assoc b :mat :lead :lead-t 9.0) (rest bs)))
+               :glass (do (float-text! (:x b) (:y b) "GLASS" 0xc4f6ff)
+                          (cons (assoc b :mat :glass) (rest bs)))
+               :ghost (do (float-text! (:x b) (:y b) "GHOST" 0xb8b0ff)
+                          (cons (assoc b :mat :ghost :ghost-n 3) (rest bs)))
+               :shatter (let [a 0.436
+                              rot (fn [vx vy a] [(- (* vx (math/cos a)) (* vy (math/sin a)))
+                                                 (+ (* vx (math/sin a)) (* vy (math/cos a)))])
+                              s (assoc b :mat :spark)
+                              [v1x v1y] (rot (:vx b) (:vy b) a)
+                              [v2x v2y] (rot (:vx b) (:vy b) (- a))]
+                          (float-text! (:x b) (:y b) "SHATTER" 0xc4f6ff)
+                          (burst! (:x b) (:y b) 0xe8fcff 18 18.0)
+                          (concat [s (assoc s :vx v1x :vy v1y :trail [])
+                                   (assoc s :vx v2x :vy v2y :trail [])]
+                                  (rest bs)))
                :split (let [a (rnd 0.35 0.6)
                             rot (fn [vx vy a] [(- (* vx (math/cos a)) (* vy (math/sin a)))
                                                (+ (* vx (math/sin a)) (* vy (math/cos a)))])
@@ -413,10 +448,11 @@
             :lamps (w/count-where #(= % w/LAMP))
             :heart (w/count-where w/breakable?)
             :core (max 0 (:core-hp @S 0))
+            :lines (max 0 (- (get-in (lvl) [:well :lines] 6) (get-in @S [:well :lines] 0)))
             0)]
     (swap! S assoc :goal-left n :goal-dirty false
            ;; the last tesserae sing: few goal tiles left -> they call the Spark
-           :singers (if (and (pos? n) (<= n 8) (not (lv :tilt)))
+           :singers (if (and (pos? n) (<= n 8) (not (lv :tilt)) (not= goal :lines))
                       (let [pred (case goal :build #(= % w/GHOST) w/breakable?)]
                         (mapv w/tile-center (w/indices-where pred)))
                       []))))
@@ -454,6 +490,7 @@
             ;; meta layer: per-level bookkeeping
             :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
     (when (:core l) (boss-init! l))
+    (when (:well l) (well-init!))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
     (spawn-balls!)
@@ -554,7 +591,8 @@
             hw (* 0.5 PADDLE-W)
             ;; aim: send the bounce at the front row of what's left
             pred (if (= :build (lv :goal)) #(= % w/GHOST) w/breakable?)
-            goals (when (and (pos? vy) (< tt 0.6)) (w/indices-where pred))
+            goals (when (and (pos? vy) (< tt 0.6))
+                    (if (lv :well) (well-aim x) (w/indices-where pred)))
             aim (or (:aim @S)
                     (when (seq goals)
                       (let [i (rand-nth goals) [wx wy] (w/tile-center i)] (gfx/w->s sc wx wy))))
@@ -788,6 +826,270 @@
             x)]
     x))
 
+;; ---------------------------------------------------------------------------
+;; the mortar well (3.3), part 1: breakout x Tetris. Level key
+;;   :well {:cols [x0 x1] :rows [y0 y1] :fall s :lines n :seek k}
+;; The falling piece is MORTAR tiles in the grid, so balls collide with it
+;; through the ordinary tile physics; it moves with w/clear! / w/put!. When it
+;; comes to rest its cells become SETT tiles (piece colour, gold rim). Full
+;; rows inside the well flash, clear, and the rows above drop. State: S :well.
+
+(def well-shapes
+  ;; letter -> [box size, cells]; a quarter turn maps (x,y) -> (n-1-y, x)
+  {\I [4 [[0 1] [1 1] [2 1] [3 1]]]
+   \O [2 [[0 0] [1 0] [0 1] [1 1]]]
+   \T [3 [[1 0] [0 1] [1 1] [2 1]]]
+   \S [3 [[1 0] [2 0] [0 1] [1 1]]]
+   \Z [3 [[0 0] [1 0] [1 1] [2 1]]]
+   \J [3 [[0 0] [0 1] [1 1] [2 1]]]
+   \L [3 [[2 0] [0 1] [1 1] [2 1]]]})
+
+(def well-turns
+  ;; letter -> the four rotations' relative cells
+  (into {} (for [[k [n cs]] well-shapes]
+             [k (vec (take 4 (iterate (fn [cs] (mapv (fn [[x y]] [(- n 1 y) x]) cs)) cs)))])))
+
+(defn wcfg [] (lv :well))
+
+(defn piece-cells [p]
+  (let [px (:x p) py (:y p)]
+    (mapv (fn [[x y]] [(+ px x) (+ py y)]) (nth (get well-turns (:k p)) (mod (:r p) 4)))))
+
+(defn cell-free?
+  "Can a piece cell sit at tile (x,y)? Inside the well's columns, above its
+   floor, on an empty tile or on the falling piece itself."
+  [x y]
+  (let [[x0 x1] (:cols (wcfg)) [_ y1] (:rows (wcfg))]
+    (and (>= x x0) (<= x x1) (>= y 0) (<= y y1)
+         (let [t (w/tile-at x y)] (or (= t w/EMPTY) (= t w/MORTAR))))))
+
+(defn fits? [cells] (every? (fn [[x y]] (cell-free? x y)) cells))
+
+(defn ball-blocks?
+  "Would any ball overlap these tile cells? (A small margin: during physics
+   substeps S holds the balls' positions from the previous substep.)"
+  [cells]
+  (let [r (+ 1.0 BR 0.2)]
+    (some (fn [b]
+            (let [bx (:x b) by (:y b)]
+              (some (fn [[x y]] (and (< (math/abs (- bx (+ 1.0 (* 2.0 x)))) r)
+                                     (< (math/abs (- by (+ 1.0 (* 2.0 y)))) r)))
+                    cells)))
+          (:balls @S))))
+
+(defn place-piece! [p]
+  (let [old (:cells (:well @S)) cells (piece-cells p)
+        c (get w/piece-colors (:k p)) pid (:pid p) kc (int (:k p))]
+    (doseq [[x y] old] (w/clear! (+ x (* y w/G))))
+    (doseq [[x y] cells]
+      (let [i (+ x (* y w/G))]
+        (aset w/tpiece i pid) (aset w/tkind i kc)
+        (w/put! i w/MORTAR c)))
+    (swap! S update :well assoc :piece p :cells cells)))
+
+(defn try-move!
+  "Move the piece to p2 if it fits and no ball is in the way.
+   Returns :ok, :ball or :blocked."
+  [p2]
+  (let [cells (piece-cells p2)
+        old (set (:cells (:well @S)))]
+    (cond (not (fits? cells)) :blocked
+          (ball-blocks? (remove #(contains? old %) cells)) :ball
+          :else (do (place-piece! p2) :ok))))
+
+(defn try-rotate! [p]
+  ;; a quarter turn with simple wall kicks
+  (loop [ks [[0 0] [-1 0] [1 0] [0 -1] [-2 0] [2 0]]]
+    (if (empty? ks) :blocked
+        (let [[dx dy] (first ks)
+              r (try-move! (assoc p :r (inc (:r p)) :x (+ (:x p) dx) :y (+ (:y p) dy)))]
+          (if (= r :ok) :ok (recur (rest ks)))))))
+
+(defn well-hit!
+  "The Spark struck the falling piece (tile i). Side: shove it a column away;
+   from below: turn it; from above: tamp it down a row."
+  [i]
+  (let [wl (:well @S) p (:piece wl)]
+    (when (and p (<= (:cd wl) 0.0))
+      (let [[axis v] @hit-ctx
+            [cx cy] (w/tile-center i)
+            res (cond (= axis 0) (try-move! (update p :x + (if (pos? v) 1 -1)))
+                      (neg? v) (try-rotate! p)
+                      :else (try-move! (update p :y inc)))]
+        (swap! S update :well assoc :cd 0.12)
+        (if (= res :ok)
+          (do (burst! cx cy 0xffe08a 6 10.0) (add-score! 5))
+          (burst! cx cy 0x8a8070 3 6.0))))))
+
+(defn next-letter! []
+  ;; a 7-bag, as in Tetris: every letter once per seven pieces
+  (let [bag (:bag (:well @S))
+        bag (if (empty? bag) (shuffle (vec "IOTSZJL")) bag)]
+    (swap! S update :well assoc :bag (vec (rest bag)))
+    (first bag)))
+
+(defn drop-score
+  "How well a piece resting on these cells packs: full rows are good, holes
+   under it bad, lower is better."
+  [cells]
+  (let [[x0 x1] (:cols (wcfg)) [_ y1] (:rows (wcfg))
+        cs (set cells)
+        occ? (fn [x y] (or (contains? cs [x y]) (not (cell-free? x y))))
+        full (count (filter (fn [y] (every? (fn [x] (occ? x y)) (range x0 (inc x1))))
+                            (distinct (map second cells))))
+        holes (count (filter (fn [[x y]] (and (< y y1) (not (contains? cs [x (inc y)]))
+                                              (cell-free? x (inc y))))
+                             cells))]
+    (+ (* 12 full) (* -5 holes) (reduce + (map second cells)))))
+
+(defn well-candidates
+  "Every (rotation, column) where letter k can enter at the well's top, with
+   the score of dropping it straight down."
+  [k]
+  (let [[x0 x1] (:cols (wcfg)) [y0 _] (:rows (wcfg))]
+    (vec (for [r (range (if (= k \O) 1 4)) x (range (- x0 3) (inc x1))
+               :let [top (apply min (map second (nth (get well-turns k) r)))
+                     p {:k k :r r :x x :y (- y0 top)}]
+               :when (fits? (piece-cells p))]
+           (let [y (loop [y (:y p)] (if (fits? (piece-cells (assoc p :y (inc y)))) (recur (inc y)) y))]
+             (assoc p :score (drop-score (piece-cells (assoc p :y y)))))))))
+
+(defn eject-balls!
+  "After the well changes under a ball, lift any ball now inside a tile."
+  []
+  (swap! S update :balls
+         (fn [bs] (mapv (fn [b] (loop [b b n 0]
+                                  (if (and (< n 14) (not (:stuck b)) (overlapping (:x b) (:y b)))
+                                    (recur (update b :y - 2.0) (inc n))
+                                    b)))
+                        bs))))
+
+(defn choke!
+  "The stack reached the brim: a spark is lost and the well empties (the
+   courses already laid still count)."
+  []
+  (let [[x0 x1] (:cols (wcfg)) [_ y1] (:rows (wcfg))]
+    (doseq [y (range 0 (inc y1)) x (range x0 (inc x1))]
+      (let [i (+ x (* y w/G))]
+        (when (= w/SETT (aget w/tt i))
+          (let [[cx cy] (w/tile-center i)]
+            (burst! cx cy (aget w/tbase i) 4 12.0)
+            (w/clear! i)))))
+    (let [st (swap! S update :lives dec)]
+      (if (<= (:lives st) 0)
+        (do (swap! S assoc :mode :over :mode-t 0.0)
+            (banner! "THE GROUT SETTLES" 0xff6070 99.0))
+        (banner! "THE WELL CHOKES · SPARK LOST" 0xff7080 1.8)))))
+
+(defn brim? []
+  ;; any set tile in the well's top two rows
+  (let [[x0 x1] (:cols (wcfg)) [y0 _] (:rows (wcfg))]
+    (some (fn [y] (some (fn [x] (= w/SETT (w/tile-at x y))) (range x0 (inc x1))))
+          (range 0 (+ y0 2)))))
+
+(defn full-row? [y]
+  (let [[x0 x1] (:cols (wcfg))]
+    (every? (fn [x] (= w/SETT (w/tile-at x y))) (range x0 (inc x1)))))
+
+(defn spawn-piece! []
+  (let [wl (:well @S) k (:next wl)
+        cands (well-candidates k)]
+    (if (empty? cands)
+      (do (choke!) (swap! S update :well assoc :fall-t 0.6))
+      ;; the Mortar seeks its course: the best of a few random entries
+      (let [pick (apply max-key :score (take (max 1 (:seek (wcfg) 3)) (shuffle cands)))
+            p (assoc (dissoc pick :score) :pid (inc (:pid wl)))]
+        (if (ball-blocks? (piece-cells p))
+          (swap! S update :well assoc :fall-t 0.1)
+          (do (place-piece! p)
+              (swap! S update :well assoc :pid (:pid p) :fall-t (:fall (wcfg)))
+              (swap! S update :well assoc :next (next-letter!))))))))
+
+(defn lock-piece! []
+  (let [cells (:cells (:well @S))]
+    (doseq [[x y] cells]
+      (let [i (+ x (* y w/G)) [cx cy] (w/tile-center i)]
+        (w/set-ghost! i)
+        (burst! cx cy 0xffe08a 3 7.0)))
+    (add-score! 20)
+    (swap! S update :well assoc :piece nil :cells [] :fall-t 0.35)
+    (let [rows (vec (sort (filter full-row? (distinct (map second cells)))))]
+      (cond (seq rows) (swap! S update :well assoc :flash {:rows rows :t 0.45})
+            (brim?) (choke!)
+            :else nil))))
+
+(defn clear-rows!
+  "Remove the full rows and drop everything above them, touching only the
+   tiles that change (w/put!-style calls keep the render cache and joins right)."
+  [rows]
+  (let [[x0 x1] (:cols (wcfg)) [y0 y1] (:rows (wcfg))
+        gone (set rows) n (count rows)
+        xs (range x0 (inc x1))
+        snap (fn [y] (mapv (fn [x] (let [i (+ x (* y w/G))]
+                                     [(aget w/tt i) (aget w/tkind i) (aget w/tpiece i)]))
+                           xs))
+        kept (vec (for [y (range y1 -1 -1) :when (not (gone y))] (snap y)))
+        [wx wy] (w/tile-center (+ (quot (+ x0 x1) 2) (* (first rows) w/G)))]
+    (doseq [y rows x xs]
+      (let [[cx cy] (w/tile-center (+ x (* y w/G)))]
+        (burst! cx cy (if (even? x) 0xffe08a 0xffffff) 4 16.0)))
+    (doseq [j (range (inc y1)) [jx x] (map-indexed vector xs)]
+      (let [y (- y1 j) i (+ x (* y w/G))
+            [t k pid] (get (get kept j) jx [w/EMPTY 0 0])
+            cur [(aget w/tt i) (aget w/tkind i) (aget w/tpiece i)]]
+        (cond (and (= t w/EMPTY) (not= (first cur) w/EMPTY)) (w/clear! i)
+              (= t w/EMPTY) nil
+              (and (= cur [t k pid]) (not (gone y))) nil
+              :else (do (aset w/tkind i k) (aset w/tpiece i pid) (w/set-ghost! i)))))
+    (let [pts (get [0 100 300 500 800] (min n 4))
+          word (get ["" "LINE!" "DOUBLE!" "TRIPLE!" "TETRIS!"] (min n 4))]
+      (add-score! pts)
+      (float-text! wx wy (str word " +" pts) (if (>= n 4) 0xfff2a0 0xffe08a))
+      (when (>= n 4) (banner! "TETRIS!" 0xfff2a0 1.2)))
+    (swap! S update :well (fn [wl] (assoc wl :flash nil :lines (+ (:lines wl) n) :fall-t 0.3)))
+    (swap! S assoc :goal-dirty true)
+    (eject-balls!)
+    (when (brim?) (choke!))))
+
+(defn update-flash! [dt]
+  (let [{:keys [rows t]} (get-in @S [:well :flash]) t (- t dt)
+        [x0 x1] (:cols (wcfg))]
+    (if (> t 0.0)
+      (let [c (if (even? (int (* t 16.0))) 0xffffff 0xffd060)]
+        (doseq [y rows x (range x0 (inc x1))]
+          (let [i (+ x (* y w/G))]
+            (aset w/tbase i c) (aset w/tdot i c) (aset w/thl i 0xffffff) (aset w/tsh i (gfx/scale c 0.7))
+            (@w/on-change x y)))
+        (swap! S assoc-in [:well :flash :t] t))
+      (clear-rows! rows))))
+
+(defn well-init! []
+  (swap! S assoc :well {:piece nil :cells [] :fall-t 1.2 :cd 0.0 :lines 0 :pid 5000
+                        :bag [] :flash nil :next nil})
+  (swap! S update :well assoc :next (next-letter!)))
+
+(defn update-well! [dt]
+  (let [wl (:well @S) bs (:balls @S)]
+    (cond
+      (:flash wl) (update-flash! dt)
+      (and (seq bs) (every? :stuck bs)) nil      ; the well waits for the launch
+      :else
+      (let [t (- (:fall-t wl) dt)]
+        (swap! S update :well assoc :cd (max 0.0 (- (:cd wl) dt)) :fall-t t)
+        (when (<= t 0.0)
+          (if-let [p (:piece wl)]
+            (case (try-move! (update p :y inc))
+              :ok (swap! S update :well assoc :fall-t (:fall (wcfg)))
+              :ball (swap! S update :well assoc :fall-t 0.08)
+              (lock-piece!))
+            (spawn-piece!)))))))
+
+(defn well-aim
+  "Autopilot: send the Spark up the side channel nearest the ball, so it
+   tops out and drops into the well's mouth."
+  [x]
+  (if (< x 24.0) [72 1] [95 22]))
+
 (defn update-paddle! [dt]
   (let [p (:paddle @S)
         hw (* 0.5 PADDLE-W)
@@ -993,6 +1295,7 @@
   (when (neg? (:li @S)) (when (some :stuck (:balls @S)) (launch!)))
   (update-balls-frame! dt)
   (when (lv :core) (update-boss! dt))
+  (when (lv :well) (update-well! dt))
   (step-world! dt)
   (when (:goal-dirty @S) (recount-goal!))
   (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
@@ -1052,7 +1355,14 @@
             (if rb?
               (gfx/glow! sc x y 1.6 0.5 (hue (+ (* 0.18 j) (* 1.5 t)) 1.0) (* 0.45 f))
               (gfx/glow! sc x y 1.4 0.4 c (* 0.22 f)))))
-        (gfx/ball! sc (:x b) (:y b) 3.4 BR c 1.0)))
+        (case (:mat b)
+          :ghost (do (gfx/glow! sc (:x b) (:y b) 2.4 0.0 c 0.3)          ; hollow, translucent
+                     (gfx/ball! sc (:x b) (:y b) 2.6 BR c 0.42))
+          :glass (let [a (* 11.0 t)]                                   ; a sharp sparkle orbits
+                   (gfx/ball! sc (:x b) (:y b) 3.0 BR c 1.0)
+                   (gfx/glow! sc (+ (:x b) (* 0.9 (math/cos a))) (+ (:y b) (* 0.9 (math/sin a)))
+                              0.8 0.12 0xffffff (if (even? (int (* 20.0 t))) 1.0 0.5)))
+          (gfx/ball! sc (:x b) (:y b) 3.4 BR c 1.0))))
     ;; lodestone shimmer
     (doseq [[x y] (:lodes st)]
       (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
@@ -1111,25 +1421,41 @@
       (gfx/fg! sb c)
       (.append sb s))))
 
-(def level-keys "1234567890-")
+(def level-keys "1234567890-=")
 (defn level-key-label [j] (if (< j (count level-keys)) (subs level-keys j (inc j)) " "))
 
 (defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
 
 (defn controls []
   (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0 -  jump to level" "Q      quit"]
+    (neg? (:li @S)) ["SPACE  begin" "1-0 - =  jump to level" "Q      quit"]
     (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
     (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
     (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
     :else ["←→/mouse  trowel" "SPACE  launch" "P pause  Q menu"]))
+
+;; ---------------------------------------------------------------------------
+;; the mortar well (3.3), part 2: the next-piece preview in the panel
+
+(def well-preview
+  ;; letter -> two panel rows of "██" cells (a cell is ~1:2, so two chars is square)
+  {\I ["████████" ""] \O ["████" "████"] \T ["  ██" "██████"] \S ["  ████" "████"]
+   \Z ["████" "  ████"] \J ["██" "██████"] \L ["    ██" "██████"]})
+
+(defn draw-well-panel! [^StringBuilder sb r]
+  (let [k (get-in @S [:well :next])]
+    (when k
+      (let [[a b] (get well-preview k) c (get w/piece-colors k)]
+        (panel-line! sb (r 13) "NEXT MORTAR" 0x808aa0)
+        (panel-line! sb (r 14) (str "  " a) c)
+        (panel-line! sb (r 15) (str "  " b) c)))))
 
 (defn draw-panel! [^StringBuilder sb]
   (let [sc @scr st @S l (lvl) top (:oy sc) acc (:accent (theme))
         title? (neg? (:li st))
         r (fn [i] (+ top i))
         goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
-                    :core "core hits" "")
+                    :core "core hits" :lines "lines to go" "")
         [fps cells bytes] @fps-stat]
     (panel-line! sb (r 0) "T E S S E R A E" acc)
     (panel-line! sb (r 1) "──────────────────────" 0x404660)
@@ -1155,6 +1481,7 @@
                                             (str "swirl in " (int (math/ceil (:swirl-t st))) "s"))
                              (:ward l) (str "tile lent for " (int (math/ceil (:ward-t st))) "s")
                              (:decay l) (str "grout creeps " (int (math/ceil (:decay-t st))) "s")
+                             (:well l) (if (get-in st [:well :flash]) "COURSE LAID" "side shoves · below turns")
                              (:magnet l) (if (pos? (:mag-cd st)) "magnet charging" "magnet READY")
                              (:tilt l) (let [[a c] (:tilt st)] (format "tilt %+.1f %+.1f" a c))
                              :else "")
@@ -1164,7 +1491,8 @@
                              (pos? (:stun st 0.0)) 0xffe070
                              (and (:swirl l) (< (:swirl-t st 99.0) 3.0)) 0xffa060
                              :else acc))
-          (meta-hud! sb r)))
+          (meta-hud! sb r)
+          (when (:well l) (draw-well-panel! sb r))))
     (let [cs (controls)]
       (doseq [[j s] (map-indexed vector cs)]
         (panel-line! sb (r (+ (meta-controls-row) j)) s 0x8890a8)))

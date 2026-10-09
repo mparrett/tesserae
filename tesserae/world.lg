@@ -11,6 +11,8 @@
 (def EMPTY 0) (def NORM 1) (def HARD 2) (def WALL 3) (def GHOST 4) (def MITO 5)
 (def RUBBER 6) (def LEAD 7) (def MAGNET 8) (def PIT 9) (def LAMP 10) (def WARD 11)
 (def SETT 12) (def SHIELD 13) (def CORE 14)
+(def MORTAR 15)   ; the Mortar Well's falling piece (solid, unbreakable, translucent)
+(def GLASS 16) (def WISP 17)   ; ball-material pickups: glass, ghost
 
 (def tt (int-array N))      ; type
 (def thits (int-array N))   ; hits left
@@ -26,7 +28,7 @@
 (def outside (atom 0x07070c))
 (def on-change (atom (fn [tx ty] nil)))
 
-(def breakable? #{NORM HARD MITO RUBBER LEAD MAGNET LAMP})
+(def breakable? #{NORM HARD MITO RUBBER LEAD MAGNET LAMP GLASS WISP})
 
 ;; ---------------------------------------------------------------------------
 ;; seeded rng (xorshift32) so a level's tetromino packing is stable
@@ -120,6 +122,8 @@
     7 (aset tdot i 0x22262e)                         ; lead: dark slug
     8 (do (aset tdot i 0xe8e8f0) (aset thl i 0xff6a80)) ; magnet: silver pole
     10 (do (aset tdot i 0xfff6c8) (aset thl i 0xffe9a0)) ; lamp
+    16 (do (aset tdot i 0xf4ffff) (aset thl i 0xe8ffff)) ; glass: bright pane
+    17 (do (aset tdot i 0x1c1830) (aset thl i 0xd8d0ff)) ; ghost: hollow
     3 (do (aset thl i 0x707884) (aset tsh i 0x2a2e36))
     nil)
   (changed! i))
@@ -172,6 +176,10 @@
                   ring (or (and (< u 0.3) (= 0 (bit-and j 1))) (and (< v 0.3) (= 0 (bit-and j 2)))
                            (and (> u 0.7) (= 0 (bit-and j 4))) (and (> v 0.7) (= 0 (bit-and j 8))))]
               (gfx/mix b (aget tbase i) (if ring 0.5 0.1)))
+          15 (let [b (aget bgc i) j (aget tjoin i)
+                   ring (or (and (< u 0.25) (= 0 (bit-and j 1))) (and (< v 0.25) (= 0 (bit-and j 2)))
+                            (and (> u 0.75) (= 0 (bit-and j 4))) (and (> v 0.75) (= 0 (bit-and j 8))))]
+               (gfx/mix b (aget tbase i) (if ring 0.9 0.38)))
           9 (let [du (- u 0.5) dv (- v 0.5) d (+ (* du du) (* dv dv))]
               (if (< d 0.12) 0x000000 (if (< d 0.2) 0x14141a 0x24242c)))
           (let [j (aget tjoin i)]
@@ -218,7 +226,7 @@
 (def ^:private simple-legend
   {\H [HARD 0x8a94a8] \# [WALL 0x50565f] \+ [MITO 0x7cf2b0] \* [RUBBER 0xff4fa0]
    \% [LEAD 0x7d8597] \@ [MAGNET 0xd03050] \x [PIT 0x101014] \$ [LAMP 0xc8962e]
-   \= [SHIELD 0xa89c88] \C [CORE 0xff5a30]})
+   \= [SHIELD 0xa89c88] \C [CORE 0xff5a30] \^ [GLASS 0x8fdcec] \~ [WISP 0x6c64a0]})
 
 (defn- pack-tetrominoes!
   "Fill every cell of grid g (a vector of row strings, mutable copy as

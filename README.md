@@ -11,7 +11,7 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ## Play
 
 ```sh
-./play.sh                       # title screen; SPACE to begin, 1-0 and - to jump to a level
+./play.sh                       # title screen; SPACE to begin, 1-0, - and = to jump to a level
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
 ./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
@@ -61,19 +61,20 @@ trowel in any terminal that reports motion.
 | P | pause, R restart level, Q back to the menu, Ctrl-C quit |
 | ] / [ | debug: win the level / lose a spark |
 
-## The eleven levels
+## The twelve levels
 
 | | level | what's new |
 |---|---|---|
 | I · The Chipping | 1.1 First Light | Bricks are packed tetrominoes; clearing a whole piece is a SET bonus |
-| | 1.2 Mitosis | Cell tiles split the Spark; 2-hit hard tiles |
+| | 1.2 Mitosis | Cell tiles split the Spark; 2-hit hard tiles; a glass pickup (the Spark shatters into three on the trowel) |
 | II · The Turning | 2.1 Quarter Turn | The whole field rotates 90° every 15 s while play continues; your trowel stays put |
 | | 2.2 Twin Trowels | Top and bottom trowels move together, two open edges, two balls, rotation |
 | III · The Setting | 3.1 Blueprint | **Reverse breakout**: ghost tiles set solid (gold-rimmed) when struck; build the crown |
 | | 3.2 Grout Creep | Reverse mode where set tiles periodically crumble back to ghosts |
+| | 3.3 Mortar Well | Breakout × Tetris: mortar tetrominoes fall down a steel well; strike a piece's side to shove it, from below to turn it; full courses clear. Lay five |
 | IV · The Tilt | 4.1 Tilt Table | No paddle: tilt a labyrinth to roll a marble to every lamp; pits swallow it |
 | | 4.2 Marble Run | Three marbles, breakable soft walls |
-| V · Lodestone | 5.1 Lodestone | Gravity, magnetic tiles that bend the Spark, a magnet trowel (catch / aim / release), rubber and lead balls |
+| V · Lodestone | 5.1 Lodestone | Gravity, magnetic tiles that bend the Spark, a magnet trowel (catch / aim / release), rubber, lead and ghost balls (ghost slips through three tiles) |
 | VI · The Heart | 6.1 The Heart | The Spark starts walled in; no paddle; you steer one tile the game lends you, and it moves on every 8 s |
 | | 6.2 The Grout Core | Finale, after Yars' Revenge: a pulsing core (6 hits) behind a scrolling, self-mending shield; a rainbow neutral zone that spins the Spark; a homing Destroyer that stuns the trowel; a Swirl to dodge every 12 s |
 
