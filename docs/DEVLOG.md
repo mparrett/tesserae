@@ -319,3 +319,30 @@ one conflict, in the ball draw call, and both sides were kept.
   turning cube with pan and zoom, reverberating edges on hits, one axis that squeezes, and
   an extruding third dimension that gives the ball and trowel a new degree of freedom.
 - Work runs on `spike/table3d` in a separate worktree, alongside the typeinfer repro agent.
+
+## 2026-10-09: 3D tilt table spike, landed on branch `spike/table3d` (not merged)
+
+- **decision: a heightfield raycast, not stacked layers** (refined by the spike agent). Each
+  pixel runs two inverse homographies (the plane of the tallest column, and the felt). Along a
+  view ray xy is affine in z, so the two points bound the ray's footprint on the board, and a
+  short grid walk finds the first column: a lit side face, a cached top, or the felt. The felt
+  gets board-normal light, cast shadows, and a lamp sheen that sweeps as the table tips. Pits
+  are real holes, the table has a slab edge, the marble casts a shadow, and walls ring on
+  hard hits.
+- **decision:** the board renders into a screen-pixel buffer (`:b3`) that `compose!` reads.
+  It redraws only when the quantized tilt or a tile changes. Motion frames draw half the
+  coarse rows each, then refine to full resolution once the tilt holds. Tiles with no column
+  on their nadir or light side skip the walk (about 30%), checked exact against the full walk.
+- **surprise:** a marble resting on a wall rang it every frame and kept the board coarse; a
+  ring now needs a real hit. The first camera (D=58) barely read as 3D; D=42 is the tuned one.
+- `--3d` for all tilt levels (the Orrery works too), plus `--level 4.3` "High Table", a special
+  level with an `:hmap` of towers and a keep. The 2D path is byte-identical (about 2 MB of
+  `compose!` output hashed against HEAD across 5 levels). Tests: 251 assertions.
+- **perf (k=2):** tilting frames 27–42 ms on the VM, 30–50 fps in play, 50 fps holding still.
+  AOT cuts the render 2.5× (`lg-tesserae-aot-3d`, lowered from the branch); `compose!`, still on
+  the VM, is now the floor.
+- **decision:** not merged during the user's v0–v2 playtest. It goes to the debrief.
+- **next 3D steps** (from the spike): one sample per cell in motion frames under AOT, a depth
+  buffer so towers can hide the marble, and the glass cube. The cube reuses the camera, the
+  buffer, the refine passes, sprite projection and shadows; per pixel, the ray hits the nearest
+  of six face homographies.
