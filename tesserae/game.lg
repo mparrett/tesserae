@@ -1438,7 +1438,7 @@
                                             (str "swirl in " (int (math/ceil (:swirl-t st))) "s"))
                              (:ward l) (str "tile lent for " (int (math/ceil (:ward-t st))) "s")
                              (:decay l) (str "grout creeps " (int (math/ceil (:decay-t st))) "s")
-                             (:well l) (if (get-in st [:well :flash]) "COURSE LAID" "side: shove · below: turn")
+                             (:well l) (if (get-in st [:well :flash]) "COURSE LAID" "side shoves · below turns")
                              (:magnet l) (if (pos? (:mag-cd st)) "magnet charging" "magnet READY")
                              (:tilt l) (let [[a c] (:tilt st)] (format "tilt %+.1f %+.1f" a c))
                              :else "")
