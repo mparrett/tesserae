@@ -221,19 +221,23 @@ unlocks, a storage round trip in the throwaway store `tesserae-test`) and custom
 
 ## Layout
 
+About 4,000 lines of let-go (code lines, excluding blanks and comments; docstrings count as code) with no dependencies beyond let-go's own `term` namespace, plus about 250 lines of tests.
+
 ```
-main.lg              arg parsing, entry
-tesserae/gfx.lg      square-pixel raster, rotation, light buffer, diffed emitter
-tesserae/world.lg    24x24 tile grid (flat arrays), tetromino packer, pixel sampler
-tesserae/input.lg    kitty key protocol, repeat-hold fallback, SGR mouse motion
-tesserae/levels.lg   story, chapters, maps (ASCII or generator fns), themes
-tesserae/game.lg     rules, physics, modes, HUD, cards, clear tally, frame loop
-tesserae/meta.lg     saved progress (let-go storage), unlocks, par medals
-tesserae/custom.lg   custom map EDN format: validate, read, write, -> level
-tesserae/editor.lg   the level editor (--edit), play-test through game.lg's custom hooks
-levels/custom/       custom maps (EDN)
-test/                clojure.test suites, run by tools/test.sh
-tools/               capture (tmux -> PNG/GIF), level runner, wait-for
-docs/PLAN.md         phases and what's next
-docs/captures/       milestone screenshots
+                     lines  what
+main.lg                 51  arg parsing, entry
+tesserae/game.lg      2371  rules, physics, modes, HUD, cards, clear tally, frame loop
+tesserae/gfx.lg        544  square-pixel raster, rotation, light buffer, diffed emitter
+tesserae/levels.lg     503  story, chapters, maps (ASCII or generator fns), themes
+tesserae/editor.lg     455  the level editor (--edit), play-test through game.lg's custom hooks
+tesserae/world.lg      335  24x24 tile grid (flat arrays), tetromino packer, pixel sampler
+tesserae/meta.lg       148  saved progress (let-go storage), unlocks, par medals
+tesserae/custom.lg     142  custom map EDN format: validate, read, write, -> level
+tesserae/input.lg      128  kitty key protocol, repeat-hold fallback, SGR mouse motion
+levels/custom/              custom maps (EDN)
+test/                  276  clojure.test suites, run by tools/test.sh
+tools/                      capture (tmux -> PNG/GIF), level runner, sim, banner, AOT/web builds
+docs/PLAN.md                phases and what's next
+docs/DEVLOG.md              decisions, surprises, deferrals, perf history
+docs/captures/              milestone screenshots
 ```
