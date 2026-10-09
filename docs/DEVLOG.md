@@ -247,3 +247,28 @@ one conflict, in the ball draw call, and both sides were kept.
   So the AOT binary now only pays on sprite-heavy frames. It stays optional, and the real
   speedup waits on the typeinfer fix that would let `compose!` lower again (the earlier build
   measured 71 → 32 ms).
+
+## 2026-10-09: VII · The Orrery (orrery agent)
+
+- **decision: deterministic marbles.** This is Turing Tumble on the tilt table. Marbles fall
+  under a fixed forward tilt, and parts move them kinematically from tile to tile. The
+  player's one choice is at the escapement: lean left or right. Puzzles stay readable, and
+  the autopilot plays a scripted `:solution`.
+- **decision: parts are tiles.** BIT, RAMP, CROSS, ESCAPE and CUP are non-solid trigger tiles
+  (types 18–22), plus a solid HOPPER. A bit's state changes through `w/put!`, so the render
+  cache and joins stay correct. Gears are a level key: bits on one axle flip together.
+- **decision: grooves.** At load, a walk of the rules tints every reachable path, so the
+  machine reads at a glance.
+- **decision: unwind, not lives.** If the goal can no longer be met, the machine resets for
+  -150.
+- **decision: bonus chapter.** 7.1–7.3 come last with `:bonus`. Clearing 6.2 still ends in
+  the epilogue (with a teaser) and unlocks 7.1 through the list-order rule. A CODA card
+  follows 7.3. Title keys `[ ] \`.
+- **surprise:** a stray paren surfaced as "Can't resolve game/main!" instead of a syntax error.
+  Loading the namespace alone found it (a let-go error-message candidate).
+- **merge (main):** `begin-level!` keeps the editor's custom-run branch and gains the CODA
+  branch. The README key table had drifted into the Tests section across earlier merges and
+  is back under Play. 15 levels; tests 241 assertions. Sim: 7.1 18 s, 7.2 18 s, 7.3 13 s
+  (scripted). AOT rebuilt with `AOT_SKIP=compose!`: 61 defns native, about 1 min.
+- Known: the tally says "sets 0" on Orrery levels; pars are 45/60/60 s, set from one
+  player's runs.
