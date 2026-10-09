@@ -1,12 +1,32 @@
-# TESSERAE
+<p align="center">
+  <img src="docs/banner.gif" alt="TESSERAE: the wordmark set from bevelled tetromino-coloured tiles, then rung by a passing Spark" width="740">
+</p>
 
-A lunch-break mosaic breaker for the terminal, written in [let-go](https://github.com/nooga/let-go).
+<p align="center"><i>A lunch-break mosaic breaker for the terminal, written in <a href="https://github.com/nooga/let-go">let-go</a>.</i></p>
 
 > Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the
 > sky's memory. Then the Grout came. You are the last Lapidary. You carry a Trowel and a
 > Spark. Break what is dead. Set what is lost. Turn the sky.
 
-![title](docs/captures/m1-title.png)
+<p align="center">
+  <img src="docs/captures/v0-rotation.gif" alt="Quarter Turn: the whole field rotates ninety degrees mid-rally while the trowel stays put" width="594">
+  <br><sub>Every cell is two square pixels, so the field is a real raster. Here it turns a quarter while the Spark is in flight.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/captures/v0-first-light.gif" alt="First Light: a wall of interlocking tetrominoes"><br><sub><b>I · The Chipping</b>: walls of packed tetrominoes; clear a whole piece for a SET bonus</sub></td>
+    <td width="50%"><img src="docs/captures/v1-well.gif" alt="Mortar Well: a falling tetromino shoved and turned by the ball"><br><sub><b>III · The Setting</b>: reverse breakout and a Tetris well you shove and turn with the Spark</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/captures/v0-tilt.gif" alt="Tilt Table: a marble rolling through a labyrinth"><br><sub><b>IV · The Tilt</b>: no trowel; tilt the table to roll marbles to every lamp</sub></td>
+    <td><img src="docs/captures/boss.gif" alt="The Grout Core boss behind a scrolling shield and a rainbow neutral zone"><br><sub><b>VI · The Heart</b>: the Grout Core, behind a scrolling shield and a neutral zone</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/captures/v2-orrery.gif" alt="The Orrery: marbles flipping bits and filling cups"><br><sub><b>VII · The Orrery</b>: marble logic in the spirit of Turing Tumble</sub></td>
+    <td><img src="docs/captures/v0-heart.gif" alt="The Heart: sparks breaking out of a walled ring"><br><sub><b>VI · The Heart</b>: the Spark starts walled in, and you steer one borrowed tile</sub></td>
+  </tr>
+</table>
 
 ## Play
 
@@ -199,6 +219,36 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
 - Ctrl-C and Q on the title screen don't quit, because a tab has nothing to quit to.
   Resizing the window refits the grid, and the game re-lays out within half a second.
 
+## AOT build (optional)
+
+let-go can lower namespaces to native Go and bake them into a custom `lg`
+(its `benchmark/aot` pipeline). `tools/build-aot.sh` does that for the renderer
+(`tesserae.gfx`, `tesserae.world`), and the game then runs those functions natively:
+
+```sh
+# 1. a let-go checkout with the two patches the lowering needs
+git clone https://github.com/mparrett/let-go.git ../let-go-tesserae-aot
+git -C ../let-go-tesserae-aot checkout wt/tesserae-aot
+
+# 2. build the binary (Go toolchain required; about a minute)
+TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot \
+  AOT_SKIP=compose! ./tools/build-aot.sh
+
+# 3. play on it
+LG=../lg-tesserae-aot ./play.sh --stats
+```
+
+- `wt/tesserae-aot` is upstream let-go plus two commits: guarded native overrides for
+  functions with typed params (without it most hot functions silently stay on bytecode) and
+  cached var reads in lowered code. Part of the first commit is upstream now (#1044).
+- `AOT_SKIP=compose!` leaves the frame compositor on the VM. Lowering it takes over an hour
+  until [let-go#1051](https://github.com/nooga/let-go/pull/1051) lands; with that fix it takes
+  under a minute and full-frame redraws get about 2× faster.
+- The binary replaces the game's functions by name, so rebuild it after editing `gfx.lg` or
+  `world.lg`, or your edits won't run.
+- What to expect: sprites and sampling about 1.7× faster; full-field redraws (rotation, level
+  start) unchanged until `compose!` lowers too.
+
 ## Tests
 
 ```sh
@@ -213,19 +263,23 @@ unlocks, a storage round trip in the throwaway store `tesserae-test`) and custom
 
 ## Layout
 
+About 4,000 lines of let-go (code lines, excluding blanks and comments; docstrings count as code) with no dependencies beyond let-go's own `term` namespace, plus about 250 lines of tests.
+
 ```
-main.lg              arg parsing, entry
-tesserae/gfx.lg      square-pixel raster, rotation, light buffer, diffed emitter
-tesserae/world.lg    24x24 tile grid (flat arrays), tetromino packer, pixel sampler
-tesserae/input.lg    kitty key protocol, repeat-hold fallback, SGR mouse motion
-tesserae/levels.lg   story, chapters, maps (ASCII or generator fns), themes
-tesserae/game.lg     rules, physics, modes, HUD, cards, clear tally, frame loop
-tesserae/meta.lg     saved progress (let-go storage), unlocks, par medals
-tesserae/custom.lg   custom map EDN format: validate, read, write, -> level
-tesserae/editor.lg   the level editor (--edit), play-test through game.lg's custom hooks
-levels/custom/       custom maps (EDN)
-test/                clojure.test suites, run by tools/test.sh
-tools/               capture (tmux -> PNG/GIF), level runner, wait-for
-docs/PLAN.md         phases and what's next
-docs/captures/       milestone screenshots
+                     lines  what
+main.lg                 51  arg parsing, entry
+tesserae/game.lg      2371  rules, physics, modes, HUD, cards, clear tally, frame loop
+tesserae/gfx.lg        544  square-pixel raster, rotation, light buffer, diffed emitter
+tesserae/levels.lg     503  story, chapters, maps (ASCII or generator fns), themes
+tesserae/editor.lg     455  the level editor (--edit), play-test through game.lg's custom hooks
+tesserae/world.lg      335  24x24 tile grid (flat arrays), tetromino packer, pixel sampler
+tesserae/meta.lg       148  saved progress (let-go storage), unlocks, par medals
+tesserae/custom.lg     142  custom map EDN format: validate, read, write, -> level
+tesserae/input.lg      128  kitty key protocol, repeat-hold fallback, SGR mouse motion
+levels/custom/              custom maps (EDN)
+test/                  276  clojure.test suites, run by tools/test.sh
+tools/                      capture (tmux -> PNG/GIF), level runner, sim, banner, AOT/web builds
+docs/PLAN.md                phases and what's next
+docs/DEVLOG.md              decisions, surprises, deferrals, perf history
+docs/captures/              milestone screenshots
 ```
