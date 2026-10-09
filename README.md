@@ -15,6 +15,8 @@ A lunch-break mosaic breaker for the terminal, written in [let-go](https://githu
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
 ./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
+./play.sh --3d                  # tilt levels in 3D (spike): a perspective table you can see lean
+./play.sh --level 4.3           # High Table, the 3D showcase (a special level, no title key)
 ./play.sh --all                 # unlock every level on the title screen (testing)
 ./play.sh --reset-progress      # forget saved scores, medals and unlocks
 LG=/path/to/lg ./play.sh        # use another let-go binary
@@ -96,6 +98,16 @@ Per frame (`tesserae/gfx.lg`):
 
 Steady play costs about 60–150 changed cells, 2–4 KB, per frame at 50 fps. A full-field redraw
 (rotation, level start) is the expensive case; see `docs/PLAN.md` for the AOT path.
+
+The 3D tilt table (`--3d`, `tesserae/table3d.lg`, a spike) swaps the inverse rotation for a
+perspective camera over the tilted board. Per screen pixel, two inverse homographies (the
+plane at the tallest column's height and the felt) give the view ray's shadow on the board; a
+short grid walk finds the first column it meets (a lit side face or a cached top) or the felt
+(lit by the board normal, shadowed by nearby columns, with a lamp's sheen that slides as the
+table tilts). Pits are holes and the table has a slab edge. The board renders into a
+screen-pixel buffer only when the quantized tilt or a tile changes: half the coarse 2×2 rows
+per frame while tilting, then full resolution once it holds. Marbles are spheres with a cast
+shadow; walls ring when struck hard.
 
 Physics runs at a fixed 240 Hz substep: axis-separated tile collisions, paddle bounces
 computed in the screen frame (so the field can turn under a moving ball), screen-frame
