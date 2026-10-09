@@ -13,6 +13,14 @@
 (def SETT 12) (def SHIELD 13) (def CORE 14)
 (def MORTAR 15)   ; the Mortar Well's falling piece (solid, unbreakable, translucent)
 (def GLASS 16) (def WISP 17)   ; ball-material pickups: glass, ghost
+;; the Orrery (VII): marble logic parts. 18-22 are non-solid triggers that act
+;; on a marble whose centre enters them; tkind holds a part's state/direction.
+(def BIT 18)      ; two-state flipper: tkind 0 sends a marble right (drawn \), 1 left (/), then flips
+(def RAMP 19)     ; fixed diverter: tkind 0 right, 1 left
+(def CROSS 20)    ; crossover: a marble rolling across keeps rolling; a falling one falls through
+(def ESCAPE 21)   ; escapement: holds a marble until the table leans left or right
+(def CUP 22)      ; output bin: tkind = the cup's colour letter (char code)
+(def HOPPER 23)   ; marble dispenser (solid); marbles drop from the tile below it
 
 (def tt (int-array N))      ; type
 (def thits (int-array N))   ; hits left
@@ -125,6 +133,9 @@
     16 (do (aset tdot i 0xf4ffff) (aset thl i 0xe8ffff)) ; glass: bright pane
     17 (do (aset tdot i 0x1c1830) (aset thl i 0xd8d0ff)) ; ghost: hollow
     3 (do (aset thl i 0x707884) (aset tsh i 0x2a2e36))
+    18 (aset thl i 0x3c3428)                          ; bit: dark brass frame
+    19 (aset thl i 0x2c3038)                          ; ramp: steel frame
+    23 (do (aset tdot i 0x3a2a10) (aset thl i 0xffe0a0)) ; hopper: dark mouth
     nil)
   (changed! i))
 
@@ -157,6 +168,16 @@
 ;; ---------------------------------------------------------------------------
 ;; pixel sampler
 
+(defn- orrery-bar
+  "Bit / ramp pixel: a thick diagonal bar (\\ when tkind is 0, / when 1) in the
+   part's colour, framed in thl."
+  [i ^double u ^double v]
+  (let [d (if (== 0 (aget tkind i)) (- u v) (- (+ u v) 1.0))
+        d (if (neg? d) (- d) d)]
+    (cond (< d 0.3) (aget tbase i)
+          (or (< u 0.2) (> u 0.8) (< v 0.2) (> v 0.8)) (aget thl i)
+          :else (gfx/mix (aget bgc i) (aget tbase i) 0.15))))
+
 (defn sample
   "Static colour at world point (wx, wy)."
   [^double wx ^double wy]
@@ -182,6 +203,14 @@
                (gfx/mix b (aget tbase i) (if ring 0.9 0.38)))
           9 (let [du (- u 0.5) dv (- v 0.5) d (+ (* du du) (* dv dv))]
               (if (< d 0.12) 0x000000 (if (< d 0.2) 0x14141a 0x24242c)))
+          ;; orrery parts: a bright diagonal bar shows where a marble goes
+          18 (orrery-bar i u v) 19 (orrery-bar i u v)
+          20 (if (or (< (math/abs (- u 0.5)) 0.2) (< (math/abs (- v 0.5)) 0.2))
+               (aget tbase i) (gfx/mix (aget bgc i) (aget tbase i) 0.1))
+          21 (if (or (> v 0.72) (and (or (< u 0.22) (> u 0.78)) (> v 0.3)))
+               (aget tbase i) (gfx/mix (aget bgc i) (aget tbase i) 0.12))
+          22 (if (or (< u 0.2) (> u 0.8) (> v 0.78))
+               (aget tbase i) (gfx/mix 0x000000 (aget tbase i) 0.2))
           (let [j (aget tjoin i)]
             (cond (or (and (< u 0.3) (= 0 (bit-and j 1))) (and (< v 0.3) (= 0 (bit-and j 2))))
                   (aget thl i)
@@ -196,7 +225,7 @@
 (defn tile-at [tx ty]
   (if (and (>= tx 0) (< tx G) (>= ty 0) (< ty G)) (aget tt (+ tx (* ty G))) -1))
 
-(defn solid-type? [t] (and (not= t 0) (not= t PIT) (>= t 0)))
+(defn solid-type? [t] (and (> t 0) (not= t PIT) (or (< t 18) (> t 22))))   ; orrery triggers 18-22 aren't solid
 
 (defn count-where [pred]
   (loop [i 0 n 0] (if (< i N) (recur (inc i) (if (pred (aget tt i)) (inc n) n)) n)))
@@ -226,7 +255,17 @@
 (def ^:private simple-legend
   {\H [HARD 0x8a94a8] \# [WALL 0x50565f] \+ [MITO 0x7cf2b0] \* [RUBBER 0xff4fa0]
    \% [LEAD 0x7d8597] \@ [MAGNET 0xd03050] \x [PIT 0x101014] \$ [LAMP 0xc8962e]
-   \= [SHIELD 0xa89c88] \C [CORE 0xff5a30] \^ [GLASS 0x8fdcec] \~ [WISP 0x6c64a0]})
+   \= [SHIELD 0xa89c88] \C [CORE 0xff5a30] \^ [GLASS 0x8fdcec] \~ [WISP 0x6c64a0]
+   \X [CROSS 0x9aa4b8] \e [ESCAPE 0x4fe0d0] \V [HOPPER 0xc8a050]})
+
+(def bit-colour [0x4f8cff 0xffb02e])   ; a bit's bar: 0 blue, 1 amber
+(def cup-colour {\b 0x4a8cff \r 0xff5a5a \g 0xffcc40})
+
+(def ^:private orrery-legend
+  ;; char -> [type colour tkind]
+  {\0 [BIT (bit-colour 0) 0] \1 [BIT (bit-colour 1) 1]
+   \> [RAMP 0xa8b4c8 0] \< [RAMP 0xa8b4c8 1]
+   \b [CUP (cup-colour \b) (int \b)] \r [CUP (cup-colour \r) (int \r)] \g [CUP (cup-colour \g) (int \g)]})
 
 (defn- pack-tetrominoes!
   "Fill every cell of grid g (a vector of row strings, mutable copy as
@@ -288,6 +327,7 @@
             (let [letter (first (clojure.string/upper-case (str ch)))]
               (put! i GHOST (piece-colors letter)) (aset tkind i (int letter)))
             (contains? simple-legend ch) (let [[t c] (simple-legend ch)] (put! i t c))
+            (contains? orrery-legend ch) (let [[t c k] (orrery-legend ch)] (aset tkind i k) (put! i t c))
             (= ch \B) (swap! starts conj [(+ 1.0 (* 2 x)) (+ 1.0 (* 2 y))])
             :else nil))))
     (reset! batch? false)

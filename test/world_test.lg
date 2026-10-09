@@ -6,6 +6,8 @@
 
 (defn- snapshot [] [(vec w/tt) (vec w/tpiece) (vec w/tkind) (vec w/tbase)])
 
+(defn- count-where-i [pred] (count (w/indices-where-i pred)))
+
 (defn- load! [l seed] (w/load-map! (:map l) (get L/themes (:theme l)) seed))
 
 (deftest packing-is-deterministic
@@ -26,6 +28,8 @@
     :build (w/count-where #(= % w/GHOST))
     :lamps (w/count-where #(= % w/LAMP))
     :core (if (pos? (w/count-where #(= % w/CORE))) (get-in l [:core :hp] 0) 0)
+    ;; the Orrery: marbles to place plus bits to set
+    :orrery (+ (reduce + (vals (get-in l [:orrery :cups]))) (count (get-in l [:orrery :target])))
     ;; goal kinds this test does not know yet: something must be there to play for
     (w/count-where #(and (pos? %) (not= % w/WALL) (not= % w/PIT)))))
 
@@ -36,8 +40,30 @@
       (is (every? #(= 24 (count %)) (:map l)) "24 cols per row")
       (let [{:keys [starts]} (load! l (+ 11 j))]
         (is (pos? (goal-count l)) "goal count > 0 after load")
-        (when (or (:tilt l) (:ward l))
+        (when (and (or (:tilt l) (:ward l)) (not (:orrery l)))
           (is (seq starts) "ball starts (B) present"))))))
+
+(deftest orrery-levels-are-wired
+  (doseq [[j l] (map-indexed vector L/levels) :when (:orrery l)]
+    (testing (:id l)
+      (load! l (+ 11 j))
+      (let [c (:orrery l)
+            at (fn [[x y]] (aget w/tt (+ x (* y w/G))))]
+        (is (= 1 (w/count-where #(= % w/HOPPER))) "one hopper")
+        (is (= 1 (w/count-where #(= % w/ESCAPE))) "one escapement")
+        (is (pos? (:marbles c 0)) "marbles in the hopper")
+        (is (:bonus l) "the Orrery is the bonus chapter")
+        (doseq [k (keys (:cups c))]
+          (is (pos? (count-where-i #(and (= w/CUP (aget w/tt %)) (= (int k) (aget w/tkind %)))))
+              (str "a " k " cup on the map")))
+        (doseq [p (concat (:register c) (apply concat (:gears c)))]
+          (is (= w/BIT (at p)) (str p " is a bit")))
+        (is (= (count (:register c)) (count (:target c))) "target as long as the register")
+        (is (= (count (:solution c)) (:marbles c)) "a lean per marble in the solution")))))
+
+(deftest bonus-chapter-is-last
+  (let [bonus (map :bonus L/levels)]
+    (is (= bonus (sort-by #(if % 1 0) bonus)) "bonus levels come after every main level")))
 
 (deftest levels-have-metadata
   (is (= (count L/levels) (count (distinct (map :id L/levels)))) "level ids are unique")
