@@ -185,8 +185,9 @@
 
 (defn play-problem []
   (let [d (doc) {:keys [starts goal-n]} @E]
-    (cond (and (or (:tilt d) (:ward d)) (empty? starts)) "tilt / ward maps need a B start"
-          (zero? goal-n) (str "nothing to play for: goal " (name (:goal d)) " counts 0")
+    (cond (and (or (:tilt d) (:ward d)) (empty? starts)) "tilt/ward needs a B start"
+          (zero? goal-n) (str "no " (case (:goal d) :build "ghosts" :lamps "lamps" "tiles")
+                              " to play for")
           :else nil)))
 
 (defn play-test! []
@@ -239,7 +240,7 @@
       (= k :ctrl-c) (quit!)
       (contains? #{:q} k) (if (:dirty e)
                             (do (swap! E assoc :confirm true)
-                                (msg! "unsaved! q quit · s save+quit" 0xffd24a))
+                                (msg! "unsaved: q quit, s save" 0xffd24a))
                             (quit!))
       (= k :esc) (do (swap! E assoc :anchor nil :pen false) (msg! "" 0))
       (contains? #{:left :h} k) (move! -1 0)
