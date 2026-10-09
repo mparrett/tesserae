@@ -764,19 +764,27 @@
     (when (:framed? sc)
       (let [x0 (dec (:ox sc)) y0 (dec (:oy sc)) x1 (+ (:ox sc) (:cols sc)) y1 (+ (:oy sc) (:rows sc))
             st @S
+            acc (:accent (theme))
             warn? (and (lv :rotate) (not (:rot st)) (< (:rot-timer st) 3.0))
-            c (cond (:rot st) 0xffffff
-                    warn? (if (even? (int (* 6 (:rot-timer st)))) 0xffe070 0x5a4a10)
-                    :else (gfx/scale (:accent (theme)) 0.55))
-            key [c x0 y0]]
+            base (cond (:rot st) 0xffffff
+                       warn? (if (even? (int (* 6 (:rot-timer st)))) 0xffe070 0x5a4a10)
+                       :else (gfx/scale acc 0.55))
+            ;; the tilt table lights the edge the marbles are rolling toward
+            [tx ty] (if (lv :tilt) (:tilt st) [0.0 0.0])
+            side (fn [t] (if (pos? t) (gfx/mix (gfx/scale acc 0.4) 0xffffff (min 1.0 t)) (gfx/scale acc 0.4)))
+            [cl cr ct cb] (if (lv :tilt)
+                            [(side (- tx)) (side tx) (side (- ty)) (side ty)]
+                            [base base base base])
+            key [cl cr ct cb x0 y0]]
         (when (not= key (:border-key @S))
           (swap! S assoc :border-key key)
-          (gfx/bg! sb 0x000000) (gfx/fg! sb c)
-          (gfx/at sb x0 y0) (.append sb (str "╭" (apply str (repeat (:cols sc) "─")) "╮"))
-          (gfx/at sb x0 y1) (.append sb (str "╰" (apply str (repeat (:cols sc) "─")) "╯"))
-          (doseq [y (range (inc y0) y1)]
-            (gfx/at sb x0 y) (.append sb "│")
-            (gfx/at sb x1 y) (.append sb "│")))))))
+          (gfx/bg! sb 0x000000)
+          (gfx/fg! sb ct) (gfx/at sb x0 y0) (.append sb (str "╭" (apply str (repeat (:cols sc) "─")) "╮"))
+          (gfx/fg! sb cb) (gfx/at sb x0 y1) (.append sb (str "╰" (apply str (repeat (:cols sc) "─")) "╯"))
+          (gfx/fg! sb cl)
+          (doseq [y (range (inc y0) y1)] (gfx/at sb x0 y) (.append sb "│"))
+          (gfx/fg! sb cr)
+          (doseq [y (range (inc y0) y1)] (gfx/at sb x1 y) (.append sb "│")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; story cards

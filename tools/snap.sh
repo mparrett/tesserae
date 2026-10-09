@@ -6,7 +6,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 t="$1"; out="$2"; n="${3:-1}"; iv="${4:-0.1}"
 tmp="$(mktemp -d)"
 for i in $(seq -w 1 "$n"); do
-  tmux capture-pane -t "$t" -e -p > "$tmp/f$i.ans"
+  tmux capture-pane -t "$t" -e -p -N > "$tmp/f$i.ans"
   [ "$n" -gt 1 ] && sleep "$iv"
 done
 if [ "$n" -eq 1 ]; then
