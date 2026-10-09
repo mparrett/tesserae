@@ -169,15 +169,15 @@
           (if (and (< u 0.26) (< v 0.26)) (gfx/add b 0x0d0d12) b))
         (case t
           4 (let [b (aget bgc i) j (aget tjoin i)
-                  ring (or (and (< u 0.3) (zero? (bit-and j 1))) (and (< v 0.3) (zero? (bit-and j 2)))
-                           (and (> u 0.7) (zero? (bit-and j 4))) (and (> v 0.7) (zero? (bit-and j 8))))]
+                  ring (or (and (< u 0.3) (= 0 (bit-and j 1))) (and (< v 0.3) (= 0 (bit-and j 2)))
+                           (and (> u 0.7) (= 0 (bit-and j 4))) (and (> v 0.7) (= 0 (bit-and j 8))))]
               (gfx/mix b (aget tbase i) (if ring 0.5 0.1)))
           9 (let [du (- u 0.5) dv (- v 0.5) d (+ (* du du) (* dv dv))]
               (if (< d 0.12) 0x000000 (if (< d 0.2) 0x14141a 0x24242c)))
           (let [j (aget tjoin i)]
-            (cond (or (and (< u 0.3) (zero? (bit-and j 1))) (and (< v 0.3) (zero? (bit-and j 2))))
+            (cond (or (and (< u 0.3) (= 0 (bit-and j 1))) (and (< v 0.3) (= 0 (bit-and j 2))))
                   (aget thl i)
-                  (or (and (> u 0.7) (zero? (bit-and j 4))) (and (> v 0.7) (zero? (bit-and j 8))))
+                  (or (and (> u 0.7) (= 0 (bit-and j 4))) (and (> v 0.7) (= 0 (bit-and j 8))))
                   (aget tsh i)
                   (and (> u 0.2) (< u 0.8) (> v 0.2) (< v 0.8)) (aget tdot i)
                   :else (aget tbase i))))))))
