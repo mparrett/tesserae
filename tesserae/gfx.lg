@@ -88,16 +88,46 @@
      :rmark (int-array rows) :prmark (int-array rows)
      :ptop (int-array ncell) :pbot (int-array ncell) :pglyph (int-array ncell)
      :tglyph (object-array ncell) :tcol (int-array ncell)
-     :xf (double-array 2)         ; [cos sin] of the field angle
+     :xf (double-array 3)         ; [cos sin identity?] of the field angle
+     :wcache (int-array npx)      ; posterized static colour per *world* pixel
+     :sgr-cache (volatile! {})
      :full (atom true)
      :stats (int-array 4)}))      ; [cells-emitted bytes dirty-cells -]
 
 (defn too-small? [scr] (< (:tc scr) (+ 48 2 20)))
 
-(defn set-angle! [scr theta]
-  (let [xf (:xf scr)]
-    (aset xf 0 (math/cos theta))
-    (aset xf 1 (math/sin theta))))
+(defn set-angle!
+  "Set the field angle. Rest angles (multiples of 90 degrees) snap to exact
+   sin/cos so pixel centres map exactly and the cache lines up."
+  [scr theta]
+  (let [xf (:xf scr)
+        q (/ theta (* 0.5 math/PI))
+        rq (math/round q)
+        snap? (< (math/abs (- q rq)) 1e-6)
+        c (if snap? (nth [1.0 0.0 -1.0 0.0] (mod rq 4)) (math/cos theta))
+        s (if snap? (nth [0.0 1.0 0.0 -1.0] (mod rq 4)) (math/sin theta))]
+    (aset xf 0 c)
+    (aset xf 1 s)
+    (aset xf 2 (if (and snap? (zero? (mod rq 4))) 1.0 0.0))))
+
+(defn cache-rect!
+  "Re-sample the static layer into the world-pixel cache over the world box
+   [x0,x1)x[y0,y1)."
+  [scr static-fn x0 y0 x1 y1]
+  (let [k (:k scr) S (:S scr) wc (:wcache scr) kinv (/ 1.0 k)
+        u0 (max 0 (int (math/floor (* x0 k)))) u1 (min S (int (math/ceil (* x1 k))))
+        v0 (max 0 (int (math/floor (* y0 k)))) v1 (min S (int (math/ceil (* y1 k))))]
+    (loop [v v0]
+      (when (< v v1)
+        (let [wy (* (+ v 0.5) kinv) row (* v S)]
+          (loop [u u0]
+            (when (< u u1)
+              (let [c (static-fn (* (+ u 0.5) kinv) wy)]
+                (aset wc (+ u row) (post (cr c) (cg c) (cb c))))
+              (recur (inc u)))))
+        (recur (inc v))))))
+
+(defn rebuild-cache! [scr static-fn] (cache-rect! scr static-fn 0.0 0.0 WORLD WORLD))
 
 (defn invalidate! [scr] (reset! (:full scr) true))
 
@@ -227,6 +257,13 @@
 ;; ---------------------------------------------------------------------------
 ;; compose + emit
 
+(defn- sgr-str [cache c bg?]
+  (let [key (if bg? (- -1 c) c)]
+    (or (get @cache key)
+        (let [s (str ESC (if bg? "[48;2;" "[38;2;") (cr c) ";" (cg c) ";" (cb c) "m")]
+          (vswap! cache assoc key s)
+          s))))
+
 (defn- sgr-fg [^StringBuilder sb c]
   (.append sb ESC) (.append sb "[38;2;") (.append sb (cr c)) (.append sb ";")
   (.append sb (cg c)) (.append sb ";") (.append sb (cb c)) (.append sb "m"))
@@ -235,61 +272,66 @@
   (.append sb (cg c)) (.append sb ";") (.append sb (cb c)) (.append sb "m"))
 
 (defn compose!
-  "Sample, diff and emit the arena into sb. static-fn: (wx wy) -> packed colour
-   of the static layer at a world point. Returns nil; fills (:stats scr)."
+  "Diff and emit the arena into sb. static-fn: (wx wy) -> packed colour; only
+   used for the outside colour here (the static layer comes from the cache).
+   Fills (:stats scr) = [cells-emitted bytes dirty-cells]."
   [scr static-fn ^StringBuilder sb]
-  (let [k (:k scr) S (:S scr) cols (:cols scr) rows (:rows scr)
+  (let [S (:S scr) cols (:cols scr) rows (:rows scr)
         ox (:ox scr) oy (:oy scr)
         full? @(:full scr)
-        xf (:xf scr) c (aget xf 0) s (aget xf 1)
-        kinv (/ 1.0 k)
-        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr) ovr (:ovr scr)
+        outside (let [c (static-fn -1.0 -1.0)] (post (cr c) (cg c) (cb c)))
+        ovr (:ovr scr)
         mark (:mark scr) pmark (:pmark scr) rmark (:rmark scr) prmark (:prmark scr)
         ptop (:ptop scr) pbot (:pbot scr) pglyph (:pglyph scr)
         tglyph (:tglyph scr) tcol (:tcol scr)
+        cache (:sgr-cache scr)
         stats (:stats scr)
         start-len (.length sb)
-        ;; one pixel: static sample through inverse rotation + light, posterized
+        k (:k scr) kinv (/ 1.0 k)
+        xf (:xf scr) c (aget xf 0) s (aget xf 1) ident? (== 1.0 (aget xf 2))
+        wc (:wcache scr)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
         px (fn [x y]
              (let [i (+ x (* y S))
-                   X (- (* (+ x 0.5) kinv) HALFW) Y (- (* (+ y 0.5) kinv) HALFW)
                    o (aget ovr i)
-                   base (if (>= o 0) o
-                            (static-fn (+ HALFW (+ (* c X) (* s Y)))
-                                       (+ HALFW (- (* c Y) (* s X)))))
+                   base (cond
+                          (>= o 0) o
+                          ident? (aget wc i)
+                          :else
+                          (let [X (- (* (+ x 0.5) kinv) HALFW) Y (- (* (+ y 0.5) kinv) HALFW)
+                                wx (+ HALFW (+ (* c X) (* s Y))) wy (+ HALFW (- (* c Y) (* s X)))]
+                            (if (or (< wx 0.0) (>= wx WORLD) (< wy 0.0) (>= wy WORLD))
+                              outside
+                              (aget wc (+ (int (* wx k)) (* (int (* wy k)) S))))))
                    lr (aget ar i) lg (aget ag i) lb (aget ab i)]
                (if (and (== lr 0.0) (== lg 0.0) (== lb 0.0))
-                 (post (cr base) (cg base) (cb base))
+                 base
                  (do (aset ar i 0.0) (aset ag i 0.0) (aset ab i 0.0)
                      (post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))))))
         fg (volatile! -1) bg (volatile! -1)
         last-i (volatile! -100)
         emitted (volatile! 0) dirty (volatile! 0)]
-    (aset stats 0 0)
     (when full?
       (dotimes [i (alength ptop)] (aset ptop i -1) (aset pglyph i 0)))
     (loop [cy 0]
       (when (< cy rows)
         (when (or full? (== 1 (aget rmark cy)) (== 1 (aget prmark cy)))
-          (let [base-i (* cy cols)]
+          (let [base-i (* cy cols) y0 (* 2 cy) y1 (inc y0)]
             (loop [cx 0]
               (when (< cx cols)
                 (let [i (+ cx base-i)]
                   (when (or full? (== 1 (aget mark i)) (== 1 (aget pmark i)))
                     (vswap! dirty inc)
-                    (let [y0 (* 2 cy)
-                          top (px cx y0)
-                          bot (px cx (inc y0))
+                    (let [top (px cx y0)
+                          bot (px cx y1)
                           tg (aget tglyph i)
                           gl (if tg (int (first tg)) 0x2580)]
                       (aset ovr (+ cx (* y0 S)) -1)
-                      (aset ovr (+ cx (* (inc y0) S)) -1)
+                      (aset ovr (+ cx (* y1 S)) -1)
                       (when (or (not= top (aget ptop i)) (not= bot (aget pbot i))
                                 (not= gl (aget pglyph i)))
                         (aset ptop i top) (aset pbot i bot) (aset pglyph i gl)
                         (vswap! emitted inc)
-                        ;; cursor: skip CUP when contiguous; bridge tiny gaps is
-                        ;; left out (clean cells would need their old colours)
                         (when (or (zero? cx) (not= i (inc @last-i)))
                           (.append sb ESC) (.append sb "[")
                           (.append sb (+ oy cy)) (.append sb ";")
@@ -300,14 +342,14 @@
                                 avg (rgb (quot (+ (cr top) (cr bot)) 2)
                                          (quot (+ (cg top) (cg bot)) 2)
                                          (quot (+ (cb top) (cb bot)) 2))]
-                            (when (not= tc @fg) (sgr-fg sb tc) (vreset! fg tc))
-                            (when (not= avg @bg) (sgr-bg sb avg) (vreset! bg avg))
+                            (when (not= tc @fg) (.append sb (sgr-str cache tc false)) (vreset! fg tc))
+                            (when (not= avg @bg) (.append sb (sgr-str cache avg true)) (vreset! bg avg))
                             (.append sb tg))
                           (if (== top bot)
-                            (do (when (not= bot @bg) (sgr-bg sb bot) (vreset! bg bot))
+                            (do (when (not= bot @bg) (.append sb (sgr-str cache bot true)) (vreset! bg bot))
                                 (.append sb " "))
-                            (do (when (not= top @fg) (sgr-fg sb top) (vreset! fg top))
-                                (when (not= bot @bg) (sgr-bg sb bot) (vreset! bg bot))
+                            (do (when (not= top @fg) (.append sb (sgr-str cache top false)) (vreset! fg top))
+                                (when (not= bot @bg) (.append sb (sgr-str cache bot true)) (vreset! bg bot))
                                 (.append sb HALF)))))
                       (aset tglyph i nil)))
                   (aset pmark i (aget mark i))

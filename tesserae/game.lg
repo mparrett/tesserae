@@ -148,7 +148,9 @@
           (piece-done! i #{w/GHOST} "LAID" 120)
           nil)
 
-      :else (do (burst! cx cy 0x8090a0 2 6.0) nil))))
+      :else (do (burst! cx cy 0x8090a0 2 6.0)
+                (when (and (lv :ward) (= t w/WALL)) (swap! S assoc :combo 0))
+                nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; physics
@@ -380,6 +382,7 @@
             :time 0.0 :banner nil :banner-t 0.0
             :lodes (lodestones)})
     (gfx/set-angle! @scr 0.0)
+    (gfx/rebuild-cache! @scr w/sample)
     (spawn-balls!)
     (when (:ward l) (choose-ward!))
     (recount-goal!)
@@ -528,7 +531,7 @@
       (do (banner! (if (lv :tilt) "MARBLE LOST" "SPARK LOST") 0xff7080 1.4)
           (swap! S assoc :combo 0)
           (if (lv :tilt)
-            (swap! S assoc :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
+            (swap! S assoc :tilt [0.0 0.0] :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
                                              0.0 0.0 :marble)])
             (spawn-balls!))))))
 
@@ -661,6 +664,10 @@
     (doseq [[x y] (:lodes st)]
       (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
         (gfx/glow! sc x y (+ 4.0 (* 1.0 (math/sin (* 3.0 t)))) 0.0 0xd03050 0.25)))
+    ;; the borrowed tile glows so the eye finds it
+    (when (and (lv :ward) (>= (:ward st) 0))
+      (let [[x y] (w/tile-center (:ward st))]
+        (gfx/glow! sc x y 4.5 0.0 0xffe0e8 (+ 0.35 (* 0.2 (math/sin (* 7.0 t)))))))
     ;; particles
     (doseq [p (:parts st)]
       (gfx/glow! sc (:x p) (:y p) 1.1 0.35 (:c p) (/ (:life p) (:max p))))
@@ -867,6 +874,7 @@
       (= k :ctrl-c) (reset! quit? true)
       (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
                         (gfx/set-angle! @scr (:theta st))
+                        (gfx/rebuild-cache! @scr w/sample)
                         (clear-screen!)
                         (when (= mode :card) (swap! S assoc :card-fresh true)))
       (= mode :card) (when (and (contains? #{:space :enter :click} k) (= ev :press))
@@ -936,7 +944,9 @@
 (defn wire-world! []
   (reset! w/on-change
           (fn [tx ty]
-            (gfx/mark-world-rect! @scr (* 2.0 tx) (* 2.0 ty) (+ 1.999 (* 2.0 tx)) (+ 1.999 (* 2.0 ty))))))
+            (let [x0 (* 2.0 tx) y0 (* 2.0 ty) sc @scr]
+              (gfx/cache-rect! sc w/sample x0 y0 (+ x0 2.0) (+ y0 2.0))
+              (gfx/mark-world-rect! sc x0 y0 (+ x0 1.999) (+ y0 1.999))))))
 
 (defn main! [o]
   (reset! opts o)
