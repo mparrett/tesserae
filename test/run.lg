@@ -1,8 +1,8 @@
 ;; test/run.lg — run every suite; exit 1 on any failure or error. Use ./tools/test.sh.
 (require '[clojure.test :as t]
-         '[test.input-test] '[test.world-test] '[test.meta-test])
+         '[test.input-test] '[test.world-test] '[test.meta-test] '[test.custom-test])
 
-(let [r (t/run-tests 'test.input-test 'test.world-test 'test.meta-test)
+(let [r (t/run-tests 'test.input-test 'test.world-test 'test.meta-test 'test.custom-test)
       bad (+ (:fail r 0) (:error r 0))]
   (println (if (zero? bad) "PASS" "FAIL") (pr-str (dissoc r :type)))
   (os/exit (if (zero? bad) 0 1)))

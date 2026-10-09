@@ -46,6 +46,22 @@
          meta-clear-tick! meta-clear-key! meta-overlay! meta-title-panel! meta-hud! meta-controls-row)
 
 ;; ---------------------------------------------------------------------------
+;; custom maps (v2/editor): a level outside L/levels, played at index CUSTOM-LI.
+;; tesserae/editor.lg (play-test) and main.lg --map set these; a custom run
+;; never touches saved progress, and "back to the menu" calls on-custom-exit.
+
+(def CUSTOM-LI 1000)
+(def custom-level (atom nil))        ; a level map (tesserae.custom/->level)
+(def on-custom-exit (atom nil))      ; fn, replaces to-title! during a custom run
+
+(defn custom-li? [li] (>= li CUSTOM-LI))
+(defn custom? [] (custom-li? (or (:li @S) -1)))
+(defn level-at [li]
+  (cond (neg? li) L/title-level
+        (custom-li? li) @custom-level
+        :else (nth L/levels li)))
+
+;; ---------------------------------------------------------------------------
 ;; small helpers
 
 (defn clampf [x lo hi] (if (< x lo) lo (if (> x hi) hi x)))
@@ -474,7 +490,7 @@
                           (assoc (stuck-ball) :stuck (+ -2.0 (* 4.0 j)))))))))
 
 (defn load-level! [li]
-  (let [l (if (neg? li) L/title-level (nth L/levels li))
+  (let [l (level-at li)
         th (get L/themes (:theme l))
         {:keys [starts]} (w/load-map! (:map l) th (+ 11 (max li 0)))]
     (swap! S merge
@@ -1589,19 +1605,26 @@
   (load-level! li)
   (swap! S assoc :mode :play :mode-t 0.0))
 
+(declare to-title!)
+
 (defn begin-level! [li]
-  (if (>= li (count L/levels))
+  (cond
+    (custom-li? li) (to-title!)                       ; after a custom clear
+    (>= li (count L/levels))
     (do (meta-epilogue!)
         (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title]))
+    :else
     (let [l (nth L/levels li)]
       (load-level! li)
       (show-card! (str (:chapter l) "  ·  " (:name l)) (:card l)
                   (:accent (get L/themes (:theme l))) [:level li]))))
 
 (defn to-title! []
-  (clear-screen!)
-  (load-level! -1)
-  (swap! S assoc :mode :play :mode-t 0.0))
+  (if (and (custom?) @on-custom-exit)
+    (@on-custom-exit)
+    (do (clear-screen!)
+        (load-level! -1)
+        (swap! S assoc :mode :play :mode-t 0.0))))
 
 (defn new-game! [li]
   (swap! S assoc :score 0 :lives 5)
@@ -1704,7 +1727,7 @@
 (defn meta-init! [o]
   (when (:reset-progress o) (M/reset-all!))
   (M/load!)
-  (reset! M/saving? (not (:autoplay o)))
+  (reset! M/saving? (not (or (:autoplay o) (:custom o))))   ; custom maps never save
   (swap! S assoc :best (M/best)))
 
 (defn meta-unlocked? [j] (M/unlocked? L/levels j (:all @opts)))
@@ -1721,15 +1744,17 @@
         l (lvl)
         secs (:time st)
         lscore (- (:score st) (:score0 st 0))
-        facts (M/record-clear! L/levels (:li st) {:score lscore :secs secs :flawless flawless})
-        best? (M/save-best! (:score st))]
+        facts (if (custom?)                            ; custom maps: a medal, no record
+                {:medal (M/medal secs (:par l)) :flawless flawless :prev nil}
+                (M/record-clear! L/levels (:li st) {:score lscore :secs secs :flawless flawless}))
+        best? (when-not (custom?) (M/save-best! (:score st)))]
     (swap! S assoc :banner-t 0.0 :best (M/best)
            :tally (merge facts {:title (:banner st) :secs secs :par (:par l) :sets (:sets st 0)
                                 :bonus (:clear-bonus st 0) :lost (:lost st 0)
                                 :lscore lscore :best-overall? best?}))))
 
 (defn meta-over! []
-  (when-not (:over-saved @S)
+  (when-not (or (:over-saved @S) (custom?))
     (let [new? (M/save-best! (:score @S))]
       (swap! S assoc :over-saved true :over-best? (boolean new?) :best (M/best)))))
 
@@ -1922,10 +1947,14 @@
   (in/start!)
   (try
     (clear-screen!)
-    (if-let [li (:level o)]
-      (do (swap! S assoc :score 0 :lives 5)
-          (if (:skip-card o) (enter-level! li) (begin-level! li)))
-      (to-title!))
+    (cond
+      (:custom o) (do (reset! custom-level (:custom o))       ; --map: play it, then exit
+                      (reset! on-custom-exit #(reset! quit? true))
+                      (swap! S assoc :score 0 :lives 5)
+                      (enter-level! CUSTOM-LI))
+      (:level o) (do (swap! S assoc :score 0 :lives 5)
+                     (if (:skip-card o) (enter-level! (:level o)) (begin-level! (:level o))))
+      :else (to-title!))
     (let [fps (or (:fps o) 50)
           frame-ns (/ 1e9 fps)
           t-start (System/nanoTime)

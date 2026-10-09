@@ -36,6 +36,61 @@ Each level has a par time. A clear at or under par earns gold (●), within 1.5�
 silver, otherwise bronze; a clear without losing a spark adds +500 and a ✦. The clear
 tally shows time against par, the medal, sets laid, the bonuses and new bests.
 
+## Editor
+
+```sh
+./play.sh --edit levels/custom/mine.edn    # open (or start) a map; no file = levels/custom/untitled-N.edn
+./play.sh --map levels/custom/twin-gates.edn   # play a custom map straight away, exit after the clear
+```
+
+![editor](docs/captures/v2-editor.png)
+
+The editor draws the map with the game's renderer and theme, so `?` and `,` regions show
+packed into tetrominoes exactly as they will play (the file keeps the raw chars). A pulsing
+outline marks the cursor; with mirror on, a dim one marks its mirror cell. The panel shows
+the palette, the brush, the level settings and the keys.
+
+| keys | |
+|---|---|
+| ← ↑ → ↓ / H J K L | move the cursor |
+| SPACE / ENTER | paint (or finish a rectangle) |
+| `. ? , # + * % @ x $ b ^ ~` | pick that brush (`b` = ball start `B`) |
+| [ / ] | step through the whole palette |
+| C / TAB | next piece colour (I O T S Z J L) / solid ↔ ghost (`?`↔`,`, `I`↔`i`) |
+| E | pick the brush from the tile under the cursor |
+| F | flood-fill the region under the cursor |
+| R | rectangle: R marks a corner, move, R or SPACE fills |
+| M | mirror painting across the vertical centre line |
+| D | pen: paint while moving |
+| U | undo (30 steps) |
+| T / G | theme / goal (`:clear :build :lamps :heart`; lamps turns tilt on, heart turns ward on) |
+| 1-6 | flags: rotate, twin, tilt, gravity, magnet, ward |
+| - / = and 9 / 0 | Spark speed / par time |
+| P | play-test; Q in the game comes back with the map unchanged |
+| S / Q | save / quit (Q asks again when there are unsaved changes) |
+
+Custom maps are EDN, one key per line and one map row per line:
+
+```clojure
+{:name "Twin Gates"
+ :theme :teal            ; indigo teal umber felt violet crimson grout
+ :goal :clear            ; clear build lamps heart
+ :speed 28.8
+ :par 120                ; seconds for gold
+ :rotate 15.0            ; optional: :rotate s, :twin true :balls 2, :tilt true,
+                         ;   :gravity 9.0, :magnet true, :ward true :boundary :open
+ :map ["........................"
+       ...                ; 24 rows of 24 legend chars (see tesserae/levels.lg)
+       "........................"]}
+```
+
+Loading checks the size, the legend (the Grout Core's `=` and `C` are not allowed), the
+theme, the goal and the types, and `--map`/`--edit` stop with a message on a bad file.
+Custom runs never touch saved progress or medals: the tally shows the medal against the
+map's par, nothing is stored. Play-test refuses a map with nothing to play for, or a tilt
+or ward map without a `B` start. Two examples ship in `levels/custom/`, both made in the
+editor.
+
 ## Browser build
 
 TESSERAE also runs in a browser tab, built with let-go's WASM target (`lg -w`) and
@@ -75,8 +130,9 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check: s
 
 They cover `tesserae.input/parse` (plain keys, CSI/SS3 arrows, kitty CSI-u
 press/repeat/release, BEL resize, Ctrl-C, mouse maps), tetromino packing determinism,
-level map validity (24×24, goal count > 0, a par per level) and the meta layer (medals,
-unlocks, a storage round trip in the throwaway store `tesserae-test`).
+level map validity (24×24, goal count > 0, a par per level), the meta layer (medals,
+unlocks, a storage round trip in the throwaway store `tesserae-test`) and custom map files
+(EDN round trip, validation, the shipped examples).
 
 You need a truecolor terminal at least 76x24. 124x50 or larger doubles the raster. Kitty,
 Ghostty, WezTerm, foot and recent iTerm2 send real key-release events, so held keys feel
@@ -149,6 +205,9 @@ tesserae/input.lg    kitty key protocol, repeat-hold fallback, SGR mouse motion
 tesserae/levels.lg   story, chapters, maps (ASCII or generator fns), themes
 tesserae/game.lg     rules, physics, modes, HUD, cards, clear tally, frame loop
 tesserae/meta.lg     saved progress (let-go storage), unlocks, par medals
+tesserae/custom.lg   custom map EDN format: validate, read, write, -> level
+tesserae/editor.lg   the level editor (--edit), play-test through game.lg's custom hooks
+levels/custom/       custom maps (EDN)
 test/                clojure.test suites, run by tools/test.sh
 tools/               capture (tmux -> PNG/GIF), level runner, wait-for
 docs/PLAN.md         phases and what's next

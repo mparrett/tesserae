@@ -1,0 +1,142 @@
+(ns tesserae.custom
+  "Custom maps: the EDN file format the level editor writes and --map plays.
+
+     {:name \"Little Wheel\"
+      :theme :teal           ; a key of tesserae.levels/themes
+      :goal :clear           ; :clear :build :lamps :heart
+      :speed 28.8            ; Spark speed (world units/s)
+      :par 120               ; seconds for gold, or absent
+      :rotate 15.0           ; optional flags, see `flags`
+      :map [\"24 chars\" ... 24 rows]}
+
+   Map chars are the levels.lg legend minus the Grout Core's (= C), which need
+   a boss config. Pure functions only (no terminal), so tests can use them."
+  (:require [tesserae.levels :as L] [clojure.string :as str]))
+
+(def G 24)
+(def legal-chars (set ".?,IOTSZJLiotszjlH#+*%@x$B^~"))
+(def goals [:clear :build :lamps :heart])
+(def theme-order [:indigo :teal :umber :felt :violet :crimson :grout])
+
+;; editor flags: [key label value-when-on extra-keys-when-on]
+(def flags
+  [[:rotate "rot" 15.0 {}]
+   [:twin "twin" true {:balls 2}]
+   [:tilt "tilt" true {}]
+   [:gravity "grav" 9.0 {}]
+   [:magnet "mag" true {}]
+   [:ward "ward" true {:boundary :open}]])
+
+(def flag-extras (into #{} (mapcat (fn [[_ _ _ ex]] (keys ex)) flags)))
+
+(def blank-map (vec (repeat G (apply str (repeat G ".")))))
+
+(defn pretty-name
+  "\"twin-gates\" -> \"Twin Gates\"."
+  [s]
+  (str/join " " (map str/capitalize (remove empty? (str/split s #"[-_ ]+")))))
+
+(defn new-doc [name]
+  {:name (pretty-name name) :theme :indigo :goal :clear :speed 28.8 :par 150 :map blank-map})
+
+(defn flag-on? [doc k] (boolean (get doc k)))
+
+(defn toggle-flag
+  "Turn flag k (one of `flags`) on or off, with its extra keys."
+  [doc k]
+  (let [[_ _ on extra] (first (filter #(= k (first %)) flags))]
+    (if (get doc k)
+      (apply dissoc doc k (keys extra))
+      (merge (assoc doc k on) extra))))
+
+;; ---------------------------------------------------------------------------
+;; validation
+
+(defn problems
+  "A vector of human-readable problems with doc (empty when it is valid)."
+  [doc]
+  (if-not (map? doc)
+    ["not an EDN map"]
+    (let [m (:map doc)
+          rows? (and (vector? m) (every? string? m))]
+      (cond-> []
+        (not (string? (:name doc))) (conj ":name must be a string")
+        (not (contains? L/themes (:theme doc)))
+        (conj (str ":theme must be one of " (str/join " " (map pr-str theme-order))))
+        (not (some #{(:goal doc)} goals))
+        (conj (str ":goal must be one of " (str/join " " (map pr-str goals))))
+        (not (number? (:speed doc))) (conj ":speed must be a number")
+        (and (contains? doc :par) (not (number? (:par doc)))) (conj ":par must be a number")
+        (and (contains? doc :rotate) (not (number? (:rotate doc)))) (conj ":rotate must be seconds")
+        (and (contains? doc :gravity) (not (number? (:gravity doc)))) (conj ":gravity must be a number")
+        (not rows?) (conj ":map must be a vector of 24 strings")
+        (and rows? (not= G (count m))) (conj (str ":map has " (count m) " rows, needs 24"))
+        rows? (into (for [[y r] (map-indexed vector m)
+                          :when (not= G (count r))]
+                      (str "row " y " has " (count r) " chars, needs 24")))
+        rows? (into (for [[y r] (map-indexed vector m)
+                          [x c] (map-indexed vector r)
+                          :when (not (contains? legal-chars c))]
+                      (str "row " y " col " x ": '" c "' is not a map char")))))))
+
+(defn valid? [doc] (empty? (problems doc)))
+
+;; ---------------------------------------------------------------------------
+;; EDN text
+
+(def ^:private key-order [:name :theme :goal :speed :par :rotate :twin :balls :tilt
+                          :gravity :magnet :ward :boundary])
+
+(defn ->edn
+  "Pretty EDN: one key per line, one map row per line."
+  [doc]
+  (let [ks (concat (filter #(contains? doc %) key-order)
+                   (sort-by str (remove (set (conj key-order :map)) (keys doc))))
+        head (for [k ks] (str (pr-str k) " " (pr-str (get doc k))))
+        rows (:map doc)]
+    (str "{" (str/join "\n " head) "\n :map ["
+         (str/join "\n       " (map pr-str rows)) "]}\n")))
+
+(defn parse
+  "EDN text -> {:doc doc} or {:error \"message\"}."
+  [s]
+  (let [doc (try (read-string s) (catch Exception e ::bad))]
+    (if (= doc ::bad)
+      {:error "not readable EDN"}
+      (let [ps (problems doc)]
+        (if (seq ps)
+          {:error (str/join "; " (take 4 ps)) :problems ps}
+          {:doc doc})))))
+
+(defn load-file*
+  "Read and validate a custom map file -> {:doc} or {:error}."
+  [path]
+  (let [s (try (slurp path) (catch Exception e nil))]
+    (if (nil? s)
+      {:error (str "can't read " path)}
+      (let [r (parse s)]
+        (if (:error r) (update r :error #(str path ": " %)) r)))))
+
+(defn save-file!
+  "Write doc to path (whole file, spit has no :append). Returns nil or an
+   error string. The directory must exist (levels/custom/ ships with the game)."
+  [path doc]
+  (try
+    (spit path (->edn doc))
+    nil
+    (catch Exception e (str "save failed: " (ex-message e)))))
+
+(defn exists? [path] (try (slurp path) true (catch Exception e false)))
+
+(defn basename [path]
+  (let [f (last (str/split path #"/"))]
+    (if (str/ends-with? f ".edn") (subs f 0 (- (count f) 4)) f)))
+
+;; ---------------------------------------------------------------------------
+;; doc -> playable level
+
+(defn ->level
+  "A level map in the shape of tesserae.levels/levels."
+  [doc]
+  (merge (dissoc doc :name)
+         {:id "✎" :name (:name doc) :chapter "CUSTOM MAP"}))

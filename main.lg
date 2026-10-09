@@ -1,5 +1,5 @@
 (ns main
-  (:require [tesserae.game :as game] [js]))
+  (:require [tesserae.game :as game] [tesserae.editor :as editor] [tesserae.custom :as custom] [clojure.string] [js]))
 
 (defn parse-args [args]
   (loop [as args o {}]
@@ -15,6 +15,11 @@
             "--stats" (recur (rest as) (assoc o :hud-stats true))
             "--all" (recur (rest as) (assoc o :all true))                   ; unlock every level
             "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
+            ;; the level editor: --edit [file.edn]; play a custom map: --map file.edn
+            "--edit" (if (and b (not (clojure.string/starts-with? b "--")))
+                       (recur (drop 2 as) (assoc o :edit true :edit-file b))
+                       (recur (rest as) (assoc o :edit true)))
+            "--map" (recur (drop 2 as) (assoc o :map-file b))
             (recur (rest as) o))))))
 
 ;; In the browser there are no command-line args; the same flags come from the
@@ -28,6 +33,19 @@
            ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
            ["reset-progress" false]]))
 
+(defn fail! [msg]
+  (println (str "tesserae: " msg))
+  (os/exit 1))
+
+(defn run-main! [o]
+  (cond
+    (:edit o) (when-let [err (editor/main! o)] (fail! err))
+    (:map-file o) (let [{:keys [doc error]} (custom/load-file* (:map-file o))]
+                    (if error
+                      (fail! error)
+                      (game/main! (assoc o :custom (custom/->level doc)))))
+    :else (game/main! o)))
+
 ;; lg -w / -c evaluate the file while compiling; only run the game for real.
 (when-not *compiling-aot*
-  (game/main! (parse-args (if *in-wasm* (url-args) *command-line-args*))))
+  (run-main! (parse-args (if *in-wasm* (url-args) *command-line-args*))))

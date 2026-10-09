@@ -1,0 +1,80 @@
+(ns test.custom-test
+  "Custom map files (the level editor's EDN format): round trip, validation,
+   and the shipped examples in levels/custom/."
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
+            [tesserae.custom :as C]
+            [tesserae.world :as w]
+            [tesserae.levels :as L]))
+
+(def sample
+  (-> (C/new-doc "round-trip")
+      (assoc :theme :teal :par 120
+             :map (assoc C/blank-map
+                         2 "..???????..HH..???????.."
+                         5 ".iiii..,,,,....$$x#@*%B."
+                         9 "..^~+IOTSZJLiotszjl....."))
+      (C/toggle-flag :twin)
+      (C/toggle-flag :rotate)))
+
+(deftest edn-round-trip
+  (is (= "Round Trip" (:name sample)) "basename -> name")
+  (is (C/valid? sample))
+  (let [s (C/->edn sample) r (C/parse s)]
+    (is (nil? (:error r)))
+    (is (= sample (:doc r)) "parse (->edn doc) = doc")
+    (is (= (C/->edn (:doc r)) s) "and the text is stable")
+    (is (= 24 (count (filter #(re-find #"\"[^\"]{24}\"" %) (str/split-lines s))))
+        "one map row per line"))
+  (testing "flags carry their extra keys and come off cleanly"
+    (is (= 2 (:balls sample)))
+    (is (= sample (-> sample (C/toggle-flag :ward) (C/toggle-flag :ward))))
+    (is (= :open (:boundary (C/toggle-flag sample :ward))))
+    (is (not (contains? (C/toggle-flag sample :twin) :balls)))))
+
+(deftest file-round-trip
+  (let [path (str (os/temp-dir) "/tesserae-custom-test.edn")]
+    (is (nil? (C/save-file! path sample)))
+    (is (= sample (:doc (C/load-file* path))))
+    (is (re-find #"can't read" (:error (C/load-file* "/tmp/no/such/tesserae.edn"))))))
+
+(defn- bad [doc re]
+  (let [r (C/parse (if (string? doc) doc (pr-str doc)))]
+    (is (:error r) (str "rejected: " (pr-str re)))
+    (when (:error r) (is (re-find re (:error r))))))
+
+(deftest validation
+  (bad "{:name" #"not readable EDN")
+  (bad "[1 2 3]" #"not an EDN map")
+  (bad (assoc sample :map (pop (:map sample))) #"23 rows, needs 24")
+  (bad (assoc-in sample [:map 3] "....") #"row 3 has 4 chars")
+  (bad (assoc-in sample [:map 4] (str "Q" (subs (nth (:map sample) 4) 1))) #"row 4 col 0: 'Q'")
+  (bad (assoc-in sample [:map 4] (str "C" (subs (nth (:map sample) 4) 1))) #"'C' is not a map char")
+  (bad (assoc sample :theme :plaid) #":theme must be one of")
+  (bad (assoc sample :goal :core) #":goal must be one of")
+  (bad (assoc sample :speed "fast") #":speed must be a number")
+  (bad (assoc sample :rotate true) #":rotate must be seconds")
+  (bad (dissoc sample :name) #":name must be a string")
+  (bad (assoc sample :map "........") #"vector of 24 strings"))
+
+(deftest level-shape
+  (let [l (C/->level sample)]
+    (is (= "Round Trip" (:name l)))
+    (is (= 15.0 (:rotate l)))
+    (is (string? (:id l)) "an :id that is not a campaign id")
+    (is (not-any? #(= (:id l) (:id %)) L/levels))))
+
+(deftest shipped-examples
+  (let [files (filter #(str/ends-with? % ".edn") (map str (os/ls "levels/custom")))]
+    (is (<= 1 (count files)) "at least one example ships")
+    (doseq [f files]
+      (testing f
+        (let [{:keys [doc error]} (C/load-file* (str "levels/custom/" f))]
+          (is (nil? error))
+          (when doc
+            (w/load-map! (:map doc) (get L/themes (:theme doc)) 1011)
+            (is (pos? (case (:goal doc)
+                        (:clear :heart) (w/count-where w/breakable?)
+                        :build (w/count-where #(= % w/GHOST))
+                        :lamps (w/count-where #(= % w/LAMP))))
+                "something to play for")))))))

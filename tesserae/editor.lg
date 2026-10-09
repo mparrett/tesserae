@@ -1,0 +1,454 @@
+(ns tesserae.editor
+  "The level editor (./play.sh --edit [file]). It draws the map with the game's
+   own renderer (world/load-map! + gfx/compose!, current theme), so '?' and ','
+   regions show packed exactly as they will play, while the file keeps the raw
+   chars. The side panel holds the palette, brush, level settings and keys.
+   P play-tests the map inside the same process through game.lg's custom-level
+   hooks; Q in the game comes back here with the map unchanged."
+  (:require [term] [async]
+            [tesserae.gfx :as gfx]
+            [tesserae.world :as w]
+            [tesserae.input :as in]
+            [tesserae.levels :as L]
+            [tesserae.game :as g]
+            [tesserae.meta :as M]
+            [tesserae.custom :as C]
+            [clojure.string :as str]))
+
+(def G 24)
+(def SEED (+ 11 g/CUSTOM-LI))   ; load-level!'s seed for the custom slot: same packing as play
+(def UNDO-MAX 30)
+
+;; the palette: [char name colour] in panel order (two columns), then the pieces
+(def named
+  [[\. "empty" 0x8890a8] [\? "fill" 0xf2d14b]
+   [\, "ghost fill" 0xb08ee0] [\H "hard" 0x8a94a8]
+   [\# "wall" 0x7a8290] [\+ "mitosis" 0x7cf2b0]
+   [\* "rubber" 0xff4fa0] [\% "lead" 0x9aa2b4]
+   [\@ "lodestone" 0xe04060] [\x "pit" 0x707080]
+   [\B "ball start" 0xffd27a] [\$ "lamp" 0xe0b050]
+   [\^ "glass ball" 0x8fdcec] [\~ "ghostball" 0x9c94d0]])
+(def pieces "IOTSZJL")
+(def ghosts "iotszjl")
+(def palette (vec (concat (map first named) pieces ghosts)))
+(def char-name
+  (merge (into {} (map (fn [[c n _]] [c n]) named))
+         (into {} (map (fn [c] [c (str c " piece")]) pieces))
+         (into {} (map (fn [c] [c (str (str/upper-case (str c)) " ghost piece")]) ghosts))))
+(defn char-colour [c]
+  (or (some (fn [[ch _ col]] (when (= ch c) col)) named)
+      (get w/piece-colors (first (str/upper-case (str c))))
+      0xffffff))
+
+;; keys that pick a brush directly (input.lg lower-cases letters, so B is :b)
+(def direct-keys
+  (assoc (into {} (map (fn [c] [(keyword (str c)) c]) ".?,#+*%@x$^~")) :b \B))
+
+;; ---------------------------------------------------------------------------
+;; state
+
+(def E (atom {}))
+
+(defn doc [] (:doc @E))
+(defn rows [] (:map (doc)))
+
+(defn msg! [s c] (swap! E assoc :msg s :msg-c c))
+
+(defn cell [rs x y] (nth (nth rs y) x))
+
+(defn set-cell [rs x y ch]
+  (let [r (nth rs y)]
+    (assoc rs y (str (subs r 0 x) ch (subs r (inc x))))))
+
+(defn mirror-x [x] (- (dec G) x))
+
+(defn goal-count
+  "What the goal counts, on the world as loaded now."
+  [goal]
+  (case goal
+    (:clear :heart) (w/count-where w/breakable?)
+    :build (w/count-where #(= % w/GHOST))
+    :lamps (w/count-where #(= % w/LAMP))
+    0))
+
+(defn refresh!
+  "Re-pack and re-sample the whole map (load-map! is ~15 ms for a full field)
+   and mark every arena cell; compose! then emits only what changed."
+  []
+  (let [d (doc) sc @g/scr
+        {:keys [starts]} (w/load-map! (:map d) (get L/themes (:theme d)) SEED)]
+    (swap! g/S assoc :level (C/->level d) :li -1 :theta 0.0 :rot nil :rot-timer 99.0
+           :tilt [0.0 0.0] :stun 0.0)
+    (swap! E assoc :starts starts :goal-n (goal-count (:goal d)))
+    (gfx/set-angle! sc 0.0)
+    (gfx/rebuild-cache! sc w/sample)
+    (gfx/mark-world-rect! sc 0.0 0.0 47.99 47.99)))
+
+(defn change!
+  "Replace the doc (pushing the old one on the undo stack) and redraw."
+  [d2]
+  (let [d (doc)]
+    (when (not= d d2)
+      (swap! E (fn [e] (assoc e :doc d2 :dirty true
+                              :undo (take UNDO-MAX (cons d (:undo e))))))
+      (refresh!))))
+
+(defn edit-map! [f] (change! (update (doc) :map f)))
+
+;; ---------------------------------------------------------------------------
+;; tools
+
+(defn targets
+  "The cell plus its mirror image when mirror painting is on."
+  [x y]
+  (if (and (:mirror @E) (not= x (mirror-x x))) [[x y] [(mirror-x x) y]] [[x y]]))
+
+(defn paint-at [rs x y ch]
+  (reduce (fn [rs [tx ty]] (set-cell rs tx ty ch)) rs (targets x y)))
+
+(defn flood [rs x y ch]
+  (let [from (cell rs x y)]
+    (if (= from ch) rs
+        (loop [rs rs todo [[x y]]]
+          (if (empty? todo) rs
+              (let [[cx cy] (peek todo) todo (pop todo)]
+                (if (and (>= cx 0) (< cx G) (>= cy 0) (< cy G) (= from (cell rs cx cy)))
+                  (recur (set-cell rs cx cy ch)
+                         (conj todo [(inc cx) cy] [(dec cx) cy] [cx (inc cy)] [cx (dec cy)]))
+                  (recur rs todo))))))))
+
+(defn flood-at [rs x y ch]
+  (reduce (fn [rs [tx ty]] (flood rs tx ty ch)) rs (targets x y)))
+
+(defn rect-cells [[x0 y0] [x1 y1]]
+  (for [y (range (min y0 y1) (inc (max y0 y1)))
+        x (range (min x0 x1) (inc (max x0 x1)))]
+    [x y]))
+
+(defn rect-at [rs a b ch]
+  (reduce (fn [rs [x y]] (paint-at rs x y ch)) rs (rect-cells a b)))
+
+(defn paint! []
+  (let [{:keys [cx cy brush]} @E] (edit-map! #(paint-at % cx cy brush))))
+
+(defn cycle-brush [d]
+  (let [b (:brush @E) i (or (first (keep-indexed (fn [j c] (when (= c b) j)) palette)) 0)]
+    (swap! E assoc :brush (nth palette (mod (+ i d) (count palette))))))
+
+(defn next-piece
+  "c: step the piece letter, keeping solid / ghost."
+  []
+  (let [b (:brush @E) ghost? (contains? (set ghosts) b)
+        src (if ghost? ghosts pieces)
+        i (str/index-of src (str b))]
+    (swap! E assoc :brush (nth src (if i (mod (inc i) 7) 0)))))
+
+(defn toggle-ghost
+  "TAB: solid <-> ghost variant of the brush (? <-> , and I <-> i)."
+  []
+  (let [b (:brush @E)
+        sw (merge {\? \, \, \?}
+                  (zipmap pieces ghosts) (zipmap ghosts pieces))]
+    (when-let [b2 (get sw b)] (swap! E assoc :brush b2))))
+
+(defn move! [dx dy]
+  (swap! E (fn [e] (assoc e :cx (max 0 (min (dec G) (+ (:cx e) dx)))
+                          :cy (max 0 (min (dec G) (+ (:cy e) dy))))))
+  (when (:pen @E) (paint!)))
+
+(defn cycle-in [xs x d]
+  (let [i (or (first (keep-indexed (fn [j v] (when (= v x) j)) xs)) 0)]
+    (nth xs (mod (+ i d) (count xs)))))
+
+(defn set-goal! [goal]
+  ;; the lamp hunt needs the tilt table; the heart needs the lent tile
+  (let [d (assoc (doc) :goal goal)
+        d (if (and (= goal :lamps) (not (:tilt d))) (C/toggle-flag d :tilt) d)
+        d (if (and (= goal :heart) (not (:ward d))) (C/toggle-flag d :ward) d)]
+    (change! d)))
+
+(defn save! []
+  (let [path (:file @E) err (C/save-file! path (doc))]
+    (if err
+      (msg! err 0xff7070)
+      (do (swap! E assoc :dirty false) (msg! (str "saved " path) 0x9bea7a)))
+    (nil? err)))
+
+;; ---------------------------------------------------------------------------
+;; play-test: the game runs the map in this process; Q (its "menu") returns
+
+(def ESC (str (char 27)))
+(defn edit-keys! [] (term/write (str ESC "[>1u")))   ; kitty: disambiguate only, text stays text
+(defn pop-keys! [] (term/write (str ESC "[<u")))
+
+(declare back-to-editor!)
+
+(defn play-problem []
+  (let [d (doc) {:keys [starts goal-n]} @E]
+    (cond (and (or (:tilt d) (:ward d)) (empty? starts)) "tilt / ward maps need a B start"
+          (zero? goal-n) (str "nothing to play for: goal " (name (:goal d)) " counts 0")
+          :else nil)))
+
+(defn play-test! []
+  (if-let [p (play-problem)]
+    (msg! p 0xff7070)
+    (do (reset! g/custom-level (C/->level (doc)))
+        (reset! g/on-custom-exit back-to-editor!)
+        (swap! E assoc :mode :play)
+        (pop-keys!) (in/start!) (in/clear-held!)
+        (swap! g/S assoc :score 0 :lives 5)
+        (g/enter-level! g/CUSTOM-LI))))
+
+(defn back-to-editor! []
+  (in/stop!) (edit-keys!) (in/clear-held!)
+  (swap! E assoc :mode :edit)
+  (swap! g/S assoc :mode :edit :banner nil :parts [] :floats [] :balls [] :singers [] :tally nil)
+  (g/clear-screen!)
+  (refresh!)
+  (msg! "back from play-test" 0x9098b0))
+
+;; ---------------------------------------------------------------------------
+;; keys
+
+(defn quit! [] (reset! g/quit? true))
+
+(def flag-keys (zipmap (map #(keyword (str %)) "123456") (range 6)))
+
+(defn settings-key! [k]
+  (let [d (doc) kn (when (keyword? k) (name k))]
+    (cond
+      (= k :t) (change! (assoc d :theme (cycle-in C/theme-order (:theme d) 1)))
+      (= k :g) (set-goal! (cycle-in C/goals (:goal d) 1))
+      (= kn "-") (change! (assoc d :speed (max 12.0 (- (:speed d) 1.2))))
+      (= kn "=") (change! (assoc d :speed (min 48.0 (+ (:speed d) 1.2))))
+      (= kn "9") (change! (assoc d :par (max 10 (- (or (:par d) 150) 10))))
+      (= kn "0") (change! (assoc d :par (min 900 (+ (or (:par d) 150) 10))))
+      (contains? flag-keys k) (change! (C/toggle-flag d (first (nth C/flags (flag-keys k)))))
+      :else nil)))
+
+(defn edit-key! [k]
+  (let [e @E]
+    (cond
+      ;; quit confirmation: q again quits, s saves and quits, anything else stays
+      (:confirm e)
+      (do (swap! E assoc :confirm false)
+          (case k
+            :q (quit!)
+            :s (when (save!) (quit!))
+            (msg! "kept editing" 0x9098b0)))
+      (= k :ctrl-c) (quit!)
+      (contains? #{:q} k) (if (:dirty e)
+                            (do (swap! E assoc :confirm true)
+                                (msg! "unsaved! q quit · s save+quit" 0xffd24a))
+                            (quit!))
+      (= k :esc) (do (swap! E assoc :anchor nil :pen false) (msg! "" 0))
+      (contains? #{:left :h} k) (move! -1 0)
+      (contains? #{:right :l} k) (move! 1 0)
+      (contains? #{:up :k} k) (move! 0 -1)
+      (contains? #{:down :j} k) (move! 0 1)
+      (contains? #{:space :enter} k)
+      (if-let [a (:anchor e)]
+        (do (swap! E assoc :anchor nil) (msg! "" 0)
+            (edit-map! #(rect-at % a [(:cx e) (:cy e)] (:brush e))))
+        (paint!))
+      (= k :r) (if-let [a (:anchor e)]
+                 (do (swap! E assoc :anchor nil) (msg! "" 0)
+                     (edit-map! #(rect-at % a [(:cx e) (:cy e)] (:brush e))))
+                 (do (swap! E assoc :anchor [(:cx e) (:cy e)])
+                     (msg! "rect: move, r/space fills" 0x9098b0)))
+      (= k :f) (edit-map! #(flood-at % (:cx e) (:cy e) (:brush e)))
+      (= k :d) (do (swap! E update :pen not) (when (:pen @E) (paint!)))
+      (= k :m) (swap! E update :mirror not)
+      (= k :e) (swap! E assoc :brush (cell (rows) (:cx e) (:cy e)))
+      (= k :u) (if-let [prev (first (:undo e))]
+                 (do (swap! E assoc :doc prev :undo (rest (:undo e)) :dirty true)
+                     (refresh!) (msg! (str "undo · " (count (:undo @E)) " left") 0x9098b0))
+                 (msg! "nothing to undo" 0x9098b0))
+      (= k (keyword "[")) (cycle-brush -1)
+      (= k (keyword "]")) (cycle-brush 1)
+      (= k :c) (next-piece)
+      (= k :tab) (toggle-ghost)
+      (contains? direct-keys k) (swap! E assoc :brush (direct-keys k))
+      (= k :p) (play-test!)
+      (= k :s) (save!)
+      :else (settings-key! k))))
+
+(defn handle! [[k ev]]
+  (cond
+    (= k :resize)
+    (do (reset! g/scr (gfx/make-screen (first (term/size)) (second (term/size)) g/PANEL-W))
+        (g/clear-screen!)
+        (if (= :play (:mode @E)) (do (g/handle-event! [k ev]) nil) (refresh!)))
+    (= :play (:mode @E)) (g/handle-event! [k ev])
+    (= ev :release) nil
+    :else (edit-key! k)))
+
+;; ---------------------------------------------------------------------------
+;; drawing
+
+(defn outline!
+  "A one-pixel box (screen units; the editor never turns the field)."
+  [sc x0 y0 x1 y1 c]
+  (let [th (/ 1.0 (:k sc))]
+    (gfx/rect! sc x0 y0 x1 (+ y0 th) c)
+    (gfx/rect! sc x0 (- y1 th) x1 y1 c)
+    (gfx/rect! sc x0 y0 (+ x0 th) y1 c)
+    (gfx/rect! sc (- x1 th) y0 x1 y1 c)))
+
+(defn draw-arena! [^StringBuilder sb]
+  (let [sc @g/scr e @E t (:t e) acc (:accent (g/theme))
+        pulse (* 0.5 (+ 1.0 (math/sin (* 6.0 t))))
+        {:keys [cx cy anchor]} e]
+    ;; ball / marble starts, as the game would place them
+    (doseq [[x y] (:starts e)]
+      (gfx/ball! sc x y 3.4 g/BR (if (or (:tilt (doc)) (:ward (doc))) 0xdfe8ff 0xffd27a) 1.0))
+    ;; rectangle in progress
+    (when anchor
+      (let [[ax ay] anchor]
+        (outline! sc (* 2.0 (min ax cx)) (* 2.0 (min ay cy))
+                  (* 2.0 (inc (max ax cx))) (* 2.0 (inc (max ay cy)))
+                  (gfx/mix acc 0xffffff 0.3))))
+    ;; mirror cursor
+    (when (and (:mirror e) (not= cx (mirror-x cx)))
+      (let [mx (mirror-x cx)]
+        (outline! sc (* 2.0 mx) (* 2.0 cy) (+ 2.0 (* 2.0 mx)) (+ 2.0 (* 2.0 cy)) (gfx/scale acc 0.6))))
+    ;; the cursor: a pulsing outline and a soft glow
+    (gfx/glow! sc (+ 1.0 (* 2.0 cx)) (+ 1.0 (* 2.0 cy)) 3.2 0.0 0xffffff (+ 0.15 (* 0.3 pulse)))
+    (outline! sc (* 2.0 cx) (* 2.0 cy) (+ 2.0 (* 2.0 cx)) (+ 2.0 (* 2.0 cy))
+              (gfx/mix acc 0xffffff pulse))
+    (gfx/compose! sc w/sample sb)))
+
+(def DIM 0x8890a8)
+(def HEAD 0x606a88)
+
+(defn- entry
+  "Palette segments for one named entry, padded to width."
+  [[c nm col] brush width]
+  (let [sel? (= c brush)
+        s (str c " " nm)
+        s (str s (apply str (repeat (max 0 (- width 1 (count s))) " ")))]
+    [[(if sel? "▸" " ") 0xffffff] [s (if sel? col (gfx/scale col 0.75))]]))
+
+(defn- letter-row [letters brush label]
+  (vec (concat (mapcat (fn [c] [[(if (= c brush) "▸" " ") 0xffffff]
+                                [(str c) (char-colour c)]])
+                       letters)
+               [[(str "  " label) DIM]])))
+
+(defn draw-panel! [^StringBuilder sb]
+  (let [sc @g/scr e @E d (doc) top (:oy sc) acc (:accent (g/theme))
+        maxrow (:tr sc)
+        line (fn [i s c] (when (<= (+ top i) maxrow) (g/panel-line! sb (+ top i) s c)))
+        segs (fn [i ss] (when (<= (+ top i) maxrow) (g/panel-segs! sb (+ top i) ss)))
+        brush (:brush e)
+        file (:file e)
+        file (if (> (count file) 24) (str "…" (subs file (- (count file) 23))) file)
+        on (fn [k] (C/flag-on? d k))]
+    (line 0 "T E S S E R A E · edit" acc)
+    (line 1 "──────────────────────" 0x404660)
+    (segs 2 [[file 0xb0b8d0] [(if (:dirty e) " *" "") 0xffd24a]])
+    (line 3 (or (:msg e) "") (or (:msg-c e) DIM))
+    (segs 4 [["BRUSH " HEAD] [(str brush " ") (char-colour brush)] [(char-name brush) 0xe8ecf8]])
+    (line 5 "" 0)
+    (doseq [[j [a b]] (map-indexed vector (partition 2 named))]
+      (segs (+ 6 j) (vec (concat (entry a brush 13) (entry b brush 12)))))
+    (segs 13 (letter-row pieces brush "pieces"))
+    (segs 14 (letter-row ghosts brush "ghosts"))
+    (line 15 "" 0)
+    (segs 16 [["name  " HEAD] [(:name d) 0xe8ecf8]])
+    (segs 17 [["theme " HEAD] [(name (:theme d)) acc] ["  goal " HEAD] [(name (:goal d)) 0xe8ecf8]])
+    (segs 18 [["      " HEAD] [(str (:goal-n e) " "
+                                    (case (:goal d) :build "ghosts" :lamps "lamps" "tiles")
+                                    " to go")
+                               (if (pos? (:goal-n e 0)) 0x9098b0 0xff7070)]])
+    (segs 19 [["speed " HEAD] [(format "%.1f" (double (:speed d))) 0xe8ecf8]
+              ["  par " HEAD] [(if (:par d) (str (:par d) "s") "—") 0xe8ecf8]])
+    (doseq [[row ks] [[20 [0 1 2]] [21 [3 4 5]]]]
+      (segs row (vec (concat [["      " HEAD]]
+                             (mapcat (fn [n] (let [[k label] (nth C/flags n)]
+                                               [[(str (inc n)) HEAD]
+                                                [(str label " ") (if (on k) 0x9bea7a 0x4a5068)]]))
+                                     ks)))))
+    (segs 22 [["at    " HEAD] [(format "%02d,%02d " (:cx e) (:cy e)) 0xe8ecf8]
+              [(str (cell (:map d) (:cx e) (:cy e))) (char-colour (cell (:map d) (:cx e) (:cy e)))]
+              [(str (if (:mirror e) "  mirror" "") (if (:pen e) "  pen" "")
+                    (if (:anchor e) "  rect" "")) 0xffd24a]])
+    (line 23 "" 0)
+    (doseq [[j s] (map-indexed vector
+                               ["←↑↓→/hjkl move  spc paint"
+                                ". ? , # + * % @ x $ b ^ ~"
+                                "[ ] brush  c piece"
+                                "tab ghost  e pick  u undo"
+                                "f fill  r rect  m mirror"
+                                "d pen  t theme  g goal"
+                                "1-6 flags  - = speed"
+                                "9 0 par  p play-test"
+                                "s save  q quit"])]
+      (line (+ 24 j) s DIM))))
+
+(defn render! []
+  (let [sb (StringBuilder.)]
+    (g/draw-frame-border! sb)
+    (draw-arena! sb)
+    (draw-panel! sb)
+    (gfx/present! sb)))
+
+;; ---------------------------------------------------------------------------
+;; entry
+
+(defn open-doc
+  "{:doc :file} for path (nil = a fresh levels/custom/untitled-N.edn), or {:error}."
+  [path]
+  (let [exists? C/exists?
+        path (or path
+                 (first (for [n (range 1 1000)
+                              :let [p (str "levels/custom/untitled-" n ".edn")]
+                              :when (not (exists? p))]
+                          p)))]
+    (if (exists? path)
+      (let [r (C/load-file* path)] (if (:error r) r (assoc r :file path)))
+      {:doc (C/new-doc (C/basename path)) :file path :new true})))
+
+(defn main!
+  "o: main.lg's options plus :edit-file. Returns an error string or nil."
+  [o]
+  (let [{:keys [doc file error new]} (open-doc (:edit-file o))]
+    (if error
+      error
+      (do
+        (reset! g/opts o)
+        (reset! M/saving? false)                   ; the editor never writes progress
+        (gfx/set-glyph-mode! (get o :glyphs :quadrant))
+        (let [[tc tr] (or (term/size) [100 30])]
+          (reset! g/scr (gfx/make-screen tc tr g/PANEL-W)))
+        (g/wire-world!)
+        (reset! g/S {:score 0 :lives 5 :mode :edit :mode-t 0.0 :best 0 :li -1})
+        (reset! E {:doc doc :file file :dirty false :undo () :cx 11 :cy 11 :brush \?
+                   :mirror false :pen false :anchor nil :mode :edit :t 0.0
+                   :msg (if new "new map" "loaded") :msg-c 0x9098b0})
+        (term/raw-mode!)
+        (term/alternate-screen)
+        (term/hide-cursor)
+        (term/write (str gfx/ESC "[?7l"))
+        (edit-keys!)
+        (try
+          (g/clear-screen!)
+          (refresh!)
+          (loop [last (System/nanoTime)]
+            (let [t0 (System/nanoTime)
+                  dt (min 0.05 (/ (- t0 last) 1e9))
+                  frame-ns (/ 1e9 (if (= :play (:mode @E)) (or (:fps o) 50) 30))]
+                (doseq [ev (in/poll!)] (handle! ev))
+                (if (= :play (:mode @E))
+                  (do (g/update! dt) (g/render!))
+                  (do (swap! E update :t + dt) (render!)))
+                (let [ms (/ (- frame-ns (- (System/nanoTime) t0)) 1e6)]
+                  (when (> ms 1.0) (async/<!! (async/timeout (long ms)))))
+                (when-not @g/quit? (recur t0))))
+          (finally
+            (if (= :play (:mode @E)) (in/stop!) (pop-keys!))
+            (term/write (str gfx/ESC "[0m" gfx/ESC "[?7h" gfx/ESC "[?2026l"))
+            (term/show-cursor)
+            (term/main-screen)
+            (term/restore-mode!)))
+        nil))))
