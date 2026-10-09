@@ -162,3 +162,27 @@ one conflict, in the ball draw call, and both sides were kept.
 - **main session:** the tilt autopilot now follows a BFS path around walls and pits with a
   velocity controller, so the sim can judge tilt levels (4.1 and 4.2 clear in about 38 s with
   perfect knowledge; expect 1.5–2 min for a human).
+
+## 2026-10-09: 3.3 Mortar Well and ball materials (well agent)
+
+- **decision: the falling piece is tiles.** The mortar tetromino is MORTAR tiles in the grid,
+  moved with `w/clear!`/`w/put!`, so ball collisions, the render cache and bevel joins come
+  free. An axis/velocity hint recorded in `axis-move` tells the hit which face was struck:
+  a side hit shoves, a hit from below turns it (with kicks), a hit from above tamps it.
+- **surprise: the Spark barely visits the well.** With the well high in the field, the bot's
+  Spark hit a falling piece once in 120 s. Lowering the well (four open rows above its mouth)
+  and aiming high up the outer wall raised that to 8 hits, all of which moved the piece.
+- **decision: "the Mortar seeks its course".** Random entry points choked the well about every
+  25 s, and greedy entry points won with no player input. Taking the best of 12 random entries
+  (scored on full rows, holes and height) gives an autopilot clear in about 95–100 s at
+  5 lines, and the Spark's shoves and turns correct it.
+- **decision: forgiving choke.** Reaching the brim costs a spark and empties the well; laid
+  courses still count.
+- **decision:** a 7-bag randomizer, a NEXT preview in the panel, and `=` for the 12th level.
+- **decision: materials.** Glass shatters into three sparks (±25°) on its next trowel bounce.
+  Ghost breaks the next three breakables outright without bouncing (walls still bounce it).
+- **merge (main):** the title panel came from meta (`meta-title-panel!`, generic over
+  levels), and the HUD keeps both meta rows 11–12 and the well preview on rows 13–15.
+  3.3 gets par 150. Tests: 150 assertions pass.
+- **deferral:** speeding up the fall as you progress, queueing shoves that a ball blocks, a
+  landing shadow for the piece.
