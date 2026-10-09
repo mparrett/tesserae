@@ -303,3 +303,19 @@ one conflict, in the ball draw call, and both sides were kept.
   are in lowering, which the repro agent is A/B-ing (base vs tip vs tip + open #1039/#1038).
 - **surprise:** `lg-at.sh` at tip fails the smoke boot budget on this box. Needs
   `env 'SMOKE-BOOT-BUDGET-MS=60'` (already noted in the devbox memory).
+
+## 2026-10-09: stretch spike, a 3D tilt table (user request)
+
+- **decision: the slice.** Build the 3D labyrinth table, not the glass cube. The raster
+  already works backwards from each screen pixel into the world; a tilted board seen
+  through a perspective camera is a richer version of that inverse map, a homography per
+  height layer. Walls come from 3–4 stacked layers (the user's "layers" idea): per pixel,
+  take the topmost layer that hits a wall tile. That gives extruded walls with lit tops and
+  shaded sides, light across the felt that shifts with tilt, and a marble as a sphere with
+  a cast shadow. Physics doesn't change, since tilt already drives gravity.
+- **decision: cost plan.** 3D frames always use coarse 2×2 sampling, the board redraws only
+  when the quantized tilt changes, and the marble stays a crisp sprite.
+- **deferral → next 3D candidates:** the wireframe glass cube the Spark bounces in, a slowly
+  turning cube with pan and zoom, reverberating edges on hits, one axis that squeezes, and
+  an extruding third dimension that gives the ball and trowel a new degree of freedom.
+- Work runs on `spike/table3d` in a separate worktree, alongside the typeinfer repro agent.
