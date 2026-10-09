@@ -1,0 +1,148 @@
+(ns tesserae.meta
+  "The meta layer: saved progress, unlocks, par times and medals.
+
+   Persistence goes through let-go's `storage` namespace, a string key/value
+   store. On a native run it is one file per key under
+   $XDG_CONFIG_HOME/let-go/storage/<store>/ (~/.config/... on Linux), with the
+   store id chosen by `lg -storage-id` (play.sh passes `tesserae`). Values are
+   EDN strings (pr-str / read-string). Keys:
+
+     best             overall best score (int)
+     furthest         id of the furthest level unlocked, e.g. \"3.2\"
+     level/<id>       per-level record {:score :time :medal :flawless :clears}
+
+   Levels are keyed by :id, not index, so inserting a level keeps old records.
+   Every storage call is guarded: the first failure flips `ok?` off and the
+   game carries on with in-memory progress."
+  (:require [storage]))
+
+(def ok? (atom true))          ; storage usable?
+(def saving? (atom false))     ; meta-init! turns it on, except under --autoplay
+(def progress (atom {:best 0 :furthest nil :levels {}}))
+
+;; ---------------------------------------------------------------------------
+;; guarded storage
+
+(defn- sget [k]
+  (when @ok?
+    (try (storage/get k)
+         (catch Exception e (reset! ok? false) nil))))
+
+(defn- sput! [k v]
+  (when (and @ok? @saving?)
+    (try (storage/set k (pr-str v)) true
+         (catch Exception e (reset! ok? false) false))))
+
+(defn- skeys [prefix]
+  (when @ok?
+    (try (storage/keys prefix)
+         (catch Exception e (reset! ok? false) nil))))
+
+(defn- parse [s]
+  (when (string? s)
+    (try (read-string s) (catch Exception e nil))))
+
+(defn load!
+  "Read saved progress into the `progress` atom. Never throws."
+  []
+  (let [best (parse (sget "best"))
+        fur (parse (sget "furthest"))
+        levels (into {} (for [k (skeys "level/")
+                              :let [r (parse (sget k))]
+                              :when (map? r)]
+                          [(subs k 6) r]))]
+    (reset! progress {:best (if (number? best) best 0)
+                      :furthest (when (string? fur) fur)
+                      :levels levels})))
+
+(defn reset-all!
+  "Forget all saved progress (--reset-progress)."
+  []
+  (doseq [k (skeys "")]
+    (when @ok?
+      (try (storage/remove k) (catch Exception e (reset! ok? false)))))
+  (reset! progress {:best 0 :furthest nil :levels {}}))
+
+;; ---------------------------------------------------------------------------
+;; medals
+
+(def medal-rank {:gold 3 :silver 2 :bronze 1})
+(def medal-colour {:gold 0xffd24a :silver 0xc8d4e8 :bronze 0xd08850})
+(def medal-name {:gold "GOLD" :silver "SILVER" :bronze "BRONZE"})
+(def FLAWLESS-BONUS 500)
+
+(defn medal
+  "gold <= par, silver <= 1.5 x par, bronze otherwise; nil without a par."
+  [secs par]
+  (cond (nil? par) nil
+        (<= secs par) :gold
+        (<= secs (* 1.5 par)) :silver
+        :else :bronze))
+
+(defn better-medal [a b]
+  (if (> (get medal-rank a 0) (get medal-rank b 0)) a b))
+
+;; ---------------------------------------------------------------------------
+;; records and unlocks
+
+(defn record [id] (get-in @progress [:levels id]))
+(defn best [] (:best @progress 0))
+
+(defn save-best!
+  "Fold score into the overall best. Returns true when it is a new best."
+  [score]
+  (let [old (best)]
+    (when (> score old)
+      (swap! progress assoc :best score)
+      (sput! "best" score)
+      true)))
+
+(defn- level-index [levels id]
+  (first (keep-indexed (fn [j l] (when (= id (:id l)) j)) levels)))
+
+(defn unlocked?
+  "Level j (0-based) is open when it is the first, when progress reached it,
+   or when the level before it has been cleared."
+  [levels j all?]
+  (boolean
+   (or all? (zero? j)
+       (when-let [f (:furthest @progress)]
+         (when-let [fi (level-index levels f)] (<= j fi)))
+       (and (pos? j) (< (dec j) (count levels))
+            (record (:id (nth levels (dec j))))))))
+
+(defn reach!
+  "Mark level j as unlocked (if it is further than what is saved)."
+  [levels j]
+  (when (< j (count levels))
+    (let [f (:furthest @progress)
+          fi (if f (or (level-index levels f) -1) -1)]
+      (when (> j fi)
+        (let [id (:id (nth levels j))]
+          (swap! progress assoc :furthest id)
+          (sput! "furthest" id))))))
+
+(defn record-clear!
+  "Fold a clear of level j into its record and unlock j+1. Returns the tally
+   facts: {:medal :flawless :prev <old record> :best-score? :best-time?}."
+  [levels j {:keys [score secs flawless]}]
+  (let [l (nth levels j)
+        id (:id l)
+        m (medal secs (:par l))
+        prev (record id)
+        rec {:score (max score (:score prev 0))
+             :time (if (:time prev) (min secs (:time prev)) secs)
+             :medal (better-medal m (:medal prev))
+             :flawless (boolean (or flawless (:flawless prev)))
+             :clears (inc (:clears prev 0))}]
+    (swap! progress assoc-in [:levels id] rec)
+    (sput! (str "level/" id) rec)
+    (reach! levels (inc j))
+    {:medal m :flawless flawless :prev prev
+     :best-score? (or (nil? prev) (> score (:score prev 0)))
+     :best-time? (or (nil? prev) (nil? (:time prev)) (< secs (:time prev)))}))
+
+(defn medal-counts
+  "{:gold n :silver n :bronze n} over all saved records."
+  []
+  (frequencies (keep :medal (vals (:levels @progress)))))

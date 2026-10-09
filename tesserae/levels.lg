@@ -246,69 +246,69 @@
 ;; chapters & levels
 
 (def levels
-  [{:id "1.1" :name "First Light" :chapter "I · THE CHIPPING" :theme :indigo
+  [{:id "1.1" :name "First Light" :chapter "I · THE CHIPPING" :theme :indigo :par 150
     :map map-first-light :goal :clear :speed 28.8
     :card ["The outer courses are fouled."
            ""
            "Strike them loose. The Spark remembers their colours even when they forget."
            ""
            "Clear a whole piece, all four tesserae, and it sings."]}
-   {:id "1.2" :name "Mitosis" :chapter "I · THE CHIPPING" :theme :indigo
+   {:id "1.2" :name "Mitosis" :chapter "I · THE CHIPPING" :theme :indigo :par 150
     :map map-mitosis :goal :clear :speed 30.0
     :card ["Some tiles are cells, still alive beneath the grout."
            ""
            "Touch one and the Spark divides."]}
-   {:id "2.1" :name "Quarter Turn" :chapter "II · THE TURNING" :theme :teal
+   {:id "2.1" :name "Quarter Turn" :chapter "II · THE TURNING" :theme :teal :par 70
     :map map-quarter-turn :goal :clear :speed 28.8 :rotate 15.0
     :card ["The Mosaic was never meant to hold still. It is a dial, and the Grout has jammed it."
            ""
            "Free it and the sky turns under your feet."
            ""
            "Your Trowel stays where you stand. The world does not."]}
-   {:id "2.2" :name "Twin Trowels" :chapter "II · THE TURNING" :theme :teal
+   {:id "2.2" :name "Twin Trowels" :chapter "II · THE TURNING" :theme :teal :par 90
     :map map-twin :goal :clear :speed 26.4 :rotate 18.0 :twin true :balls 2
     :card ["Two horizons. Two Trowels. One hand."
            ""
            "Both edges are open now. Both Trowels follow you."]}
-   {:id "3.1" :name "Blueprint" :chapter "III · THE SETTING" :theme :umber
+   {:id "3.1" :name "Blueprint" :chapter "III · THE SETTING" :theme :umber :par 150
     :map map-blueprint :goal :build :speed 28.8
     :card ["Breaking is half the craft."
            ""
            "The blueprints still glimmer where the old tiles were. Strike a ghost and it sets, true and gold-rimmed."
            ""
            "Build the crown whole."]}
-   {:id "3.2" :name "Grout Creep" :chapter "III · THE SETTING" :theme :umber
+   {:id "3.2" :name "Grout Creep" :chapter "III · THE SETTING" :theme :umber :par 180
     :map map-grout :goal :build :speed 30.0 :decay 9.0 :balls 2
     :card ["The Grout fights back now, loosening what you set."
            ""
            "Finish the key faster than it forgets."]}
-   {:id "4.1" :name "Tilt Table" :chapter "IV · THE TILT" :theme :felt
+   {:id "4.1" :name "Tilt Table" :chapter "IV · THE TILT" :theme :felt :par 120
     :map map-tilt :goal :lamps :tilt true
     :card ["Beneath the Mosaic lies the Orrery: a marble table of lamps and pits."
            ""
            "No Trowel here. Tilt the table and let gravity do the work."
            ""
            "Light every lamp. Mind the dark."]}
-   {:id "4.2" :name "Marble Run" :chapter "IV · THE TILT" :theme :felt
+   {:id "4.2" :name "Marble Run" :chapter "IV · THE TILT" :theme :felt :par 150
     :map map-marble-run :goal :lamps :tilt true
     :card ["Three marbles, one table."
            ""
            "The tesserae here are soft. Knock them loose to reach the lamps inside."]}
-   {:id "5.1" :name "Lodestone" :chapter "V · LODESTONE" :theme :violet
+   {:id "5.1" :name "Lodestone" :chapter "V · LODESTONE" :theme :violet :par 130
     :map map-lodestone :goal :clear :speed 31.2 :gravity 9.0 :magnet true
     :card ["Iron sleeps in the old foundation, and it pulls at the Spark."
            ""
            "So can you. SPACE wakes the Trowel's own lodestone: catch, aim, release."
            ""
            "Rubber bounds. Lead breaks through."]}
-   {:id "6.1" :name "The Heart" :chapter "VI · THE HEART" :theme :crimson
+   {:id "6.1" :name "The Heart" :chapter "VI · THE HEART" :theme :crimson :par 110
     :map map-heart :goal :heart :speed 25.2 :ward true :boundary :open
     :card ["At the centre the Grout has walled the Spark inside its own heart."
            ""
            "You have no Trowel, only the tile the Mosaic lends you, and it will not stay lent for long."
            ""
            "Guard the breaches. Let the Spark eat its way out."]}
-   {:id "6.2" :name "The Grout Core" :chapter "VI · THE HEART" :theme :grout
+   {:id "6.2" :name "The Grout Core" :chapter "VI · THE HEART" :theme :grout :par 140
     :map map-grout-core :goal :core :speed 23.0
     :core {:hp 6}
     :shield core-shield
