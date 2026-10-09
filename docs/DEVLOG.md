@@ -346,3 +346,23 @@ one conflict, in the ball draw call, and both sides were kept.
   buffer so towers can hide the marble, and the glass cube. The cube reuses the camera, the
   buffer, the refine passes, sprite projection and shadows; per pixel, the ray hits the nearest
   of six face homographies.
+
+## 2026-10-09: AOT slowdown root-caused (repro agent)
+
+- **surprise: it wasn't typeinfer.** Typeinfer was healthy throughout: about 2.1 enqueues per
+  instruction, the same on base, tip and tip+#1038/#1039. The hour goes to `lower-go`'s
+  `closure-info*` walk over block-param sources. Since let-go #767 it doesn't cache answers
+  that touched an on-stack node, so inside a loop each `when` join doubles the paths.
+  Repro: a loop with K one-armed whens; lowering time doubles per when. Bisected to
+  0003a0b (#767). Tip doesn't fix it.
+- **opportunity:** a single fixpoint over the block-param graph (sketched as
+  `CLOSURE_FIXPOINT=1`) lowers the full `compose!` in about 67 s, with byte-identical Go
+  wherever stock finishes. That's an upstream fix candidate, and it would make the full AOT
+  binary practical again (rotated full frame 71 → 32 ms).
+- **found while in there:** our local `a8c24ea` part 1 is superseded by upstream #1044.
+- **process note:** the user's memory of an older "~100× slower typeinfer" pointed at #558
+  (type writes path-copying the inst spine). Classifying against it (enqueues per inst vs
+  time per enqueue) is what ruled typeinfer out quickly.
+- Details in `docs/letgo-upstream-candidates.md`, and the full write-up is on branch
+  `wip/typeinfer-repro` (private remote). Nothing posted upstream; that goes through the
+  upstream-outbound pipeline after the debrief.
