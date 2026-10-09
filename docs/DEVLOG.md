@@ -286,3 +286,7 @@ one conflict, in the ball draw call, and both sides were kept.
 - **opportunity → in flight:** a background agent is delta-debugging the AOT typeinfer
   slowdown into a minimal repro on branch `wip/typeinfer-repro`, as a local draft only. Every
   probe is capped at 5 min and runs under the heavy lock.
+- **cleanup:** a test run wrote `best = 715` into the real `tesserae` progress store at 15:30,
+  because a `[`/`]` debug run went without `TESS_STORAGE_ID`. Removed so the first real session
+  starts clean. Lesson: test runs that can reach game over or clear should set
+  `TESS_STORAGE_ID`, as the agent prompts asked.
