@@ -9,6 +9,8 @@
 #   --out    output binary (default ~/projects-new/lg-bin/lg-tesserae-aot)
 #   --lg     lg used to run the lowering (default: built from --letgo first, so
 #            the lowerer and the runtime the Go compiles against always match)
+#   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose! — its
+#            typeinfer runs >1 h, see docs/letgo-upstream-candidates.md)
 #   --keep   leave the generated Go in the worktree (for reading it)
 #   NS       namespaces to lower (default: tesserae.gfx tesserae.world)
 #

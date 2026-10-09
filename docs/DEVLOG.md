@@ -229,3 +229,14 @@ one conflict, in the ball draw call, and both sides were kept.
   back to a 100×30 layout.
 - Two example maps ship in `levels/custom/`, both made with the editor through tmux
   send-keys. Tests: 196 assertions.
+
+## 2026-10-09: AOT rebuild roadblock
+
+- **roadblock:** rebuilding the AOT binary after the glyph-sprite merge ran into trouble. The
+  lowering of `compose!` ran 95 min (about 18 min before the merge) and was killed.
+  typeinfer cost looks superlinear in function size or local count. Logged with repro commits
+  in `docs/letgo-upstream-candidates.md` as a likely let-go bug.
+- **decision:** `tools/aot-lower.lg` takes `AOT_SKIP=compose!`. The AOT binary lowers
+  everything else in gfx and world (`sample`, `glow!`, `ball!`, `shape-disc!`, `rect!`,
+  colour helpers), and `compose!` stays on the VM. That keeps most of the win (sampling and
+  sprites were 2.5–3×) without the hour-long build.

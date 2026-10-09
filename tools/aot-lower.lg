@@ -22,6 +22,8 @@
 (def out-root (first argv))
 (def ns-names (map symbol (rest argv)))
 
+(require 'clojure.string)
+
 (defn die [msg] (println "aot-lower ERROR:" msg) (os/exit 2))
 
 (when (or (nil? out-root) (empty? ns-names))
@@ -72,7 +74,9 @@
   (require ns-name)
   (let [src     (nsname->src ns-name)
         forms   (read-string (str "[" (slurp src) "]"))
-        defns   (vec (filter defn-form? forms))
+        skip    (set (remove empty? (clojure.string/split (or (os/getenv "AOT_SKIP") "") #",")))
+        defns   (vec (filter (fn [f] (and (defn-form? f) (not (contains? skip (str (bare-name f))))))
+                             forms))
         pkg     (nsname->pkg ns-name)
         reldir  (nsname->reldir ns-name)
         t0      (System/nanoTime)
