@@ -56,3 +56,14 @@ They are not pushed and have no upstream PR.
 Measured on the game's full-frame compose (quiet box): VM 71 ms → AOT 32 ms (rotated),
 `sample` 2.9×, `glow!` 2.7×, idle compose 3×. Frame bytes were identical (hash-checked at four
 angles).
+
+## WASM (`lg -w`)
+
+- **Storage in the browser.** `storage/*` uses `localStorage`, but the VM runs in a Web Worker,
+  where `localStorage` doesn't exist, so every call throws. Possible fixes: a page↔worker
+  storage bridge (postMessage), or IndexedDB, which workers do have.
+- An xterm.js resize doesn't reach the VM (no SIGWINCH equivalent), so apps have to poll
+  `term/size`.
+- `lg -w` evaluates the entry file while compiling, so a top-level `(main)` call runs at build
+  time unless it's guarded by `*compiling-aot*`. This is documented in usage.md, but it's
+  surprising for a game loop.

@@ -186,3 +186,27 @@ one conflict, in the ball draw call, and both sides were kept.
   3.3 gets par 150. Tests: 150 assertions pass.
 - **deferral:** speeding up the fall as you progress, queueing shoves that a ball blocks, a
   landing shadow for the piece.
+
+## 2026-10-09: v2 browser build (web agent)
+
+- **decision: shell template.** `lg -w -w-shell web/shell.html` is let-go's xterm shell plus a
+  font size picked so the grid reaches 124×50 (the doubled raster) and the WebGL renderer.
+  `?grid=small` skips doubling. Flags come from URL params via `js/url-param`, which is nil
+  outside a browser, so `?level=3&skip-card&autoplay&stats` mirrors the play.sh options.
+- **surprise:** `lg -w` evaluates main.lg while compiling, so the first build started the game
+  and hung. The entry is now guarded with `(when-not *compiling-aot* ...)`, as xsofy does.
+- **surprise:** an xterm.js resize sends the VM no signal, so under `*in-wasm*` input.lg polls
+  `term/size`.
+- **roadblock → deferral:** progress can't be saved in the browser. let-go's browser storage
+  uses `localStorage`, but the VM runs in a Web Worker, which has none. The guard shows
+  "progress not saved". Upstream candidate: a storage bridge from the page into the worker.
+- **surprise: perf.** The Go-wasm VM is roughly 3–5× slower than native: 8–20 fps on the
+  doubled raster (headless Chromium with software WebGL, loaded box), 25–40 fps with
+  `?grid=small`. Native holds 50. Deferred: an adaptive grid, and AOT-lowered gfx in the wasm
+  build.
+- Ctrl-C and title Q don't quit in a tab. The kitty keyboard and mouse escapes are harmless in
+  xterm.js.
+- **main session, sim sweep after all merges (240 s cap):** 10 of 12 levels clear (1.1 202 s,
+  1.2 126 s, 2.1 89 s, 2.2 112 s, 4.x 38 s, 5.1 136 s, 6.1 39 s, 6.2 139 s). 3.1, 3.2 and 3.3
+  end short (14, 5 and 1 left); Blueprint varies a lot run to run with a bot that can't aim at
+  thin line art.
