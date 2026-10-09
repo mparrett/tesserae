@@ -4,13 +4,14 @@
 #   tools/build-aot.sh [--letgo DIR] [--out PATH] [--lg HOST_LG] [--keep] [NS ...]
 #
 #   --letgo  let-go checkout/worktree the Go is generated into and built from
-#            (default ~/projects-new/worktrees/let-go-tesserae-aot). Never the
+#            (default $TESSERAE_AOT_LETGO, else ../worktrees/let-go-tesserae-aot next to
+#            this repo). Never the
 #            canonical checkout: the script writes (then removes) files there.
-#   --out    output binary (default ~/projects-new/lg-bin/lg-tesserae-aot)
+#   --out    output binary (default $TESSERAE_AOT_OUT, else ../lg-bin/lg-tesserae-aot)
 #   --lg     lg used to run the lowering (default: built from --letgo first, so
 #            the lowerer and the runtime the Go compiles against always match)
-#   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose! — its
-#            typeinfer runs >1 h, see docs/letgo-upstream-candidates.md)
+#   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose!: without
+#            let-go#1051 its lowering runs over an hour; see let-go#1050)
 #   --keep   leave the generated Go in the worktree (for reading it)
 #   NS       namespaces to lower (default: tesserae.gfx tesserae.world)
 #
@@ -37,8 +38,8 @@
 set -euo pipefail
 
 game="$(cd "$(dirname "$0")/.." && pwd)"
-letgo="$HOME/projects-new/worktrees/let-go-tesserae-aot"
-out="$HOME/projects-new/lg-bin/lg-tesserae-aot"
+letgo="${TESSERAE_AOT_LETGO:-$game/../worktrees/let-go-tesserae-aot}"
+out="${TESSERAE_AOT_OUT:-$game/../lg-bin/lg-tesserae-aot}"
 host_lg=""
 keep=0
 nss=()
@@ -54,7 +55,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#nss[@]} -gt 0 ]] || nss=(tesserae.gfx tesserae.world)
 letgo="$(cd "$letgo" && pwd)"
-[[ "$letgo" != "$HOME/projects-new/let-go" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout" >&2; exit 2; }
+canonical="${TESSERAE_LETGO_CANONICAL:-$game/../let-go}"
+[[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout" >&2; exit 2; }
 [[ -f "$letgo/lg.go" ]] || { echo "build-aot: $letgo is not a let-go checkout" >&2; exit 2; }
 
 gen_root="$letgo/pkg/rt/core_go_lowered"

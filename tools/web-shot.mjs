@@ -4,9 +4,9 @@
 // screenshots it, presses Space <presses> times (prologue -> card -> level 1),
 // screenshots again, and counts frames (writes that carry a DEC 2026 sync
 // begin) over 5 s on each screen. Prints a JSON summary.
-// Playwright comes from PW_MODULE (default: the joint-xsofy probe install).
-const pwPath = process.env.PW_MODULE ||
-  `${process.env.HOME}/projects-new/joint-xsofy/local-scripts/browser-smoke-playwright/node_modules/playwright/index.mjs`;
+// Playwright resolves as a normal module; set PW_MODULE to the path of a
+// playwright/index.mjs elsewhere to use another install.
+const pwPath = process.env.PW_MODULE || 'playwright';
 const { chromium } = await import(pwPath);
 const [url, prefix, pressesArg] = process.argv.slice(2);
 const presses = parseInt(pressesArg || '3');

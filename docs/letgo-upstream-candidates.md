@@ -1,8 +1,8 @@
 # let-go upstream candidates found while building TESSERAE
 
-These are local notes only. Nothing here has been filed or posted. Before anything goes
-upstream it goes through the joint-xsofy `upstream-outbound` pipeline: search for existing
-issues, run the review rubric, draft in `docs-xsofy/outbound/`, then a human pass.
+Working notes on let-go gaps hit while building the game. Filed so far: the AOT lowering
+blowup as nooga/let-go#1050, with the fix in nooga/let-go#1051. The rest are unfiled
+candidates.
 
 Verified against `lg` built from nooga/let-go `a13e042` (2026-10-09).
 
@@ -31,10 +31,12 @@ Workarounds in the game: nested `bit-or`, `math/*` everywhere, `.toString`, and
 
 ## AOT lowering (`benchmark/aot` pipeline applied to a real app)
 
-These are on local branch `wt/tesserae-aot` in `~/projects-new/worktrees/let-go-tesserae-aot`.
-They are not pushed and have no upstream PR.
+These are on a local let-go branch (`wt/tesserae-aot`), not pushed and with no upstream PR
+of their own.
 
-- `a8c24ea fix(ir)`, two fixes:
+- `a8c24ea fix(ir)`, two fixes (**part 1 is superseded by upstream #1044**, which fixes the
+  same `trampoline-call-stmts` site with a checked assert and also covers the guarded
+  direct-call fallback; drop it on rebase. Part 2 and f01a7cd have no upstream counterpart):
   1. A float-typed result of a runtime call (e.g. `(int (math/floor x))`) was assigned
      straight into a `float64` and generated invalid Go. Even `(defn h [x] (math/floor x))`
      failed to compile.
@@ -44,19 +46,33 @@ They are not pushed and have no upstream PR.
      (`rt.InvokeGoOverrideFallback`).
 - `f01a7cd perf(ir)`: lowered code caches global var lookups (`rt.CachedVar`) instead of doing
   a namespace map lookup on every read.
-- **Observation, not fixed:** typeinfer takes about 18 minutes to reach a fixpoint on one large
-  fn (`tesserae.gfx/compose!`). Everything else in gfx and world lowers in about 15 s. Turning
-  off inlining didn't help. Worth a repro for the typeinfer census work (#1040/#1048).
-  - **Second data point (2026-10-09, about 15:03):** after the glyph-sprite work added roughly
-    30 lines and a few more locals to `compose!`, the same lowering ran past 60 minutes,
-    pinning one core (`lg-aot-host` at about 130% CPU). That's at least 3× slower for a
-    modest size increase, which points to superlinear typeinfer cost in function size or
-    local count.
-  - Repro inputs: `tesserae/gfx.lg` at commits `2126d67` (≈18 min) and `7cc3cd9` (>60 min),
-    driven by `tools/build-aot.sh` / `tools/aot-lower.lg` in mparrett/tesserae (private).
-    Next step: time typeinfer alone on each `compose!` version and bisect which construct
-    (the loop-carried int-slot array, nested `let`s in the inner loop, the `px` closure)
-    drives the fixpoint iterations.
+- **ROOT-CAUSED (2026-10-09), filed as #1050, fix in #1051: exponential `closure-info*` walk
+  in Go emission, a regression from #767.** The 18 min → over 95 min `compose!` lowering isn't typeinfer. Typeinfer is
+  healthy: about 2.1 enqueues per instruction (the #558 baseline), the same work counts on
+  base, tip and tip+#1038/#1039, and 8–17 s total even on `compose!`. The time is in
+  `ir.lower-go/closure-info*` (lower_go.lg:758 at a13e042, identical at tip 49858bd).
+  - **How:** the depth-first walk over block-param sources (`unanimous-closure`, line 721)
+    doesn't cache any answer that depended on a node still on the walk's stack (line 820,
+    added by #767). Inside a loop nearly every walk reaches the header, so nothing in the
+    body is cached, and each `when` join doubles the paths: O(2^K). The walk runs for every
+    value, closures or not (`closure-value?`, `prepare-lower-body-metadata!`). licm amplifies
+    it by threading hoisted constants through every block.
+  - **Minimal repro:** `(defn f [a n] (loop [i 0] (when (< i n) (when (= 0 (aget a i))
+    (aset a i 0)) ... K whens ... (recur (inc i)))) nil)`. K=6 takes 1.8 s, K=10 12.9 s,
+    K=12 49.8 s; the same whens without the loop are linear.
+  - **Bisect:** e344ff2 (before #767) gives 1.7 / 2.1 / 2.8 s at K=8/10/12; 0003a0b (#767)
+    gives 2.5 / 7.5 / 27.9 s. The emitted Go is identical.
+  - **Not fixed** by tip (#1040, #1044) or the open #1038/#1039.
+  - **Fix direction (sketched and measured):** replace the per-query walk with one fixpoint
+    over the block-param graph per function. A param starts pending, can become one closure,
+    then nil. With this, gfx@7cc3cd9 including `compose!` lowers in about 67 s, with
+    byte-identical Go wherever stock finishes. Not yet checked against let-go's #766/#767
+    regression tests. Further ideas: skip the walk for params typeinfer proved scalar, and
+    stop licm threading rematerialisable constants through every block.
+  - **Write-up:** the repro scripts were kept locally; #1050 carries a standalone repro and
+    #1051 the fix with tests.
+  - Minor, uncaused: typeinfer time per drain rises about 1.8× over a 13× size range (a small
+    #558-class effect, about 7 s of the hour).
 - **Observation:** the lowerer guesses `:int` for params used in arithmetic, so float params
   need `^double` hints. Without them, `sample`'s params became int64.
 - Inside lowered code, `.append` on a StringBuilder goes through reflection on every call, and

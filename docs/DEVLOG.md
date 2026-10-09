@@ -26,8 +26,8 @@ ball where you control one tile.
   rides the auto-repeat: 150 ms for a fresh press, 110 ms per repeat. SGR any-motion mouse
   (1003) gives analog trowel control. let-go's decoder drops the motion bit, but motion still
   arrives as `:button :none` presses, so no let-go change was needed.
-- **decision: repo.** Started as a new sibling repo `~/projects-new/tesserae`. Moved to a
-  private GitHub remote (`mparrett/tesserae`) on request.
+- **decision: repo.** Started as a new standalone repo next to the let-go and xsofy
+  checkouts, then pushed to GitHub (`mparrett/tesserae`) on request.
 - **surprise: let-go gaps** (upstream candidates, logged in PLAN.md):
   - `bit-or` takes exactly 2 args.
   - `Math/PI`, `Math/sin` and `Math/cos` are unresolved, while `Math/sqrt` and `Math/abs`
@@ -68,7 +68,7 @@ ball where you control one tile.
 
   The catch is that one rebuild takes about 18 minutes, nearly all of it typeinfer reaching a
   fixpoint on `compose!` (an upstream candidate). So `./play.sh` defaults to the VM, and
-  `LG=~/projects-new/lg-bin/lg-tesserae-aot ./play.sh` uses the fast binary. Rebuild it after
+  `LG=<path to lg-tesserae-aot> ./play.sh` uses the fast binary. Rebuild it after
   gfx/world changes, through `tools/heavy.sh`.
 - **decision: semaphore.** `tools/heavy.sh` puts a machine-wide `flock` around CPU-heavy jobs
   (AOT builds, Go builds, long captures), so only one runs at a time on this 4-vCPU box, and
@@ -302,7 +302,7 @@ one conflict, in the ball draw call, and both sides were kept.
   43–54 ms). No reason to move the pin before the playtest. The changes that matter for us
   are in lowering, which the repro agent is A/B-ing (base vs tip vs tip + open #1039/#1038).
 - **surprise:** `lg-at.sh` at tip fails the smoke boot budget on this box. Needs
-  `env 'SMOKE-BOOT-BUDGET-MS=60'` (already noted in the devbox memory).
+  `env 'SMOKE-BOOT-BUDGET-MS=60'` on this machine.
 
 ## 2026-10-09: stretch spike, a 3D tilt table (user request)
 
@@ -319,3 +319,50 @@ one conflict, in the ball draw call, and both sides were kept.
   turning cube with pan and zoom, reverberating edges on hits, one axis that squeezes, and
   an extruding third dimension that gives the ball and trowel a new degree of freedom.
 - Work runs on `spike/table3d` in a separate worktree, alongside the typeinfer repro agent.
+
+## 2026-10-09: 3D tilt table spike, landed on branch `spike/table3d` (not merged)
+
+- **decision: a heightfield raycast, not stacked layers** (refined by the spike agent). Each
+  pixel runs two inverse homographies (the plane of the tallest column, and the felt). Along a
+  view ray xy is affine in z, so the two points bound the ray's footprint on the board, and a
+  short grid walk finds the first column: a lit side face, a cached top, or the felt. The felt
+  gets board-normal light, cast shadows, and a lamp sheen that sweeps as the table tips. Pits
+  are real holes, the table has a slab edge, the marble casts a shadow, and walls ring on
+  hard hits.
+- **decision:** the board renders into a screen-pixel buffer (`:b3`) that `compose!` reads.
+  It redraws only when the quantized tilt or a tile changes. Motion frames draw half the
+  coarse rows each, then refine to full resolution once the tilt holds. Tiles with no column
+  on their nadir or light side skip the walk (about 30%), checked exact against the full walk.
+- **surprise:** a marble resting on a wall rang it every frame and kept the board coarse; a
+  ring now needs a real hit. The first camera (D=58) barely read as 3D; D=42 is the tuned one.
+- `--3d` for all tilt levels (the Orrery works too), plus `--level 4.3` "High Table", a special
+  level with an `:hmap` of towers and a keep. The 2D path is byte-identical (about 2 MB of
+  `compose!` output hashed against HEAD across 5 levels). Tests: 251 assertions.
+- **perf (k=2):** tilting frames 27–42 ms on the VM, 30–50 fps in play, 50 fps holding still.
+  AOT cuts the render 2.5× (`lg-tesserae-aot-3d`, lowered from the branch); `compose!`, still on
+  the VM, is now the floor.
+- **decision:** not merged during the user's v0–v2 playtest. It goes to the debrief.
+- **next 3D steps** (from the spike): one sample per cell in motion frames under AOT, a depth
+  buffer so towers can hide the marble, and the glass cube. The cube reuses the camera, the
+  buffer, the refine passes, sprite projection and shadows; per pixel, the ray hits the nearest
+  of six face homographies.
+
+## 2026-10-09: AOT slowdown root-caused (repro agent)
+
+- **surprise: it wasn't typeinfer.** Typeinfer was healthy throughout: about 2.1 enqueues per
+  instruction, the same on base, tip and tip+#1038/#1039. The hour goes to `lower-go`'s
+  `closure-info*` walk over block-param sources. Since let-go #767 it doesn't cache answers
+  that touched an on-stack node, so inside a loop each `when` join doubles the paths.
+  Repro: a loop with K one-armed whens; lowering time doubles per when. Bisected to
+  0003a0b (#767). Tip doesn't fix it.
+- **opportunity:** a single fixpoint over the block-param graph (sketched as
+  `CLOSURE_FIXPOINT=1`) lowers the full `compose!` in about 67 s, with byte-identical Go
+  wherever stock finishes. That's an upstream fix candidate, and it would make the full AOT
+  binary practical again (rotated full frame 71 → 32 ms).
+- **found while in there:** our local `a8c24ea` part 1 is superseded by upstream #1044.
+- **process note:** the user's memory of an older "~100× slower typeinfer" pointed at #558
+  (type writes path-copying the inst spine). Classifying against it (enqueues per inst vs
+  time per enqueue) is what ruled typeinfer out quickly.
+- Details in `docs/letgo-upstream-candidates.md`. Filed afterwards as nooga/let-go#1050 with a
+  standalone repro, and fixed in nooga/let-go#1051 (one fixpoint per function instead of a
+  walk per query; lowering `compose!` drops from over an hour to under a minute).
