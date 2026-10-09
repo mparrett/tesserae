@@ -58,6 +58,43 @@
   (rgb (aget post-lut (clamp8 r)) (aget post-lut (clamp8 g)) (aget post-lut (clamp8 b))))
 
 ;; ---------------------------------------------------------------------------
+;; sub-cell glyph tables (shapescii lineage)
+;;
+;; A cell is 1x2 square pixels. Quadrants split it 2x2, sextants 2x3. Subcell
+;; (col i, row j) is bit 2j+i, so the thresholded coverage mask IS the index
+;; into a 16- or 64-entry table: no codebook.
+
+(def glyph-mode
+  "0 off (balls are plain light, the v0 renderer), 1 quadrant, 2 sextant.
+   Read by make-screen; set it before building a screen."
+  (atom 1))
+
+(def ^:private QUAD-CODES
+  [0x20 0x2598 0x259D 0x2580 0x2596 0x258C 0x259E 0x259B
+   0x2597 0x259A 0x2590 0x259C 0x2584 0x2599 0x259F 0x2588])
+
+(defn- sextant-code
+  "U+1FB00.. skips the four patterns that already exist as space, ▌, ▐, █."
+  [m]
+  (cond (= m 0) 0x20 (= m 63) 0x2588 (= m 21) 0x258C (= m 42) 0x2590
+        :else (- (+ 0x1FB00 m -1) (if (> m 21) 1 0) (if (> m 42) 1 0))))
+
+(defn set-glyph-mode!
+  "m: :off | :quadrant | :sextant (or 0/1/2). nil keeps the current mode."
+  [m]
+  (when m
+    (reset! glyph-mode (cond (number? m) m
+                             (= m :off) 0 (= m :sextant) 2 :else 1))))
+
+(defn- glyph-tables [mode]
+  (let [codes (int-array 64) strs (object-array 64)]
+    (dotimes [m 64]
+      (let [cp (if (= mode 2) (sextant-code m) (nth QUAD-CODES (bit-and m 15)))]
+        (aset codes m cp)
+        (aset strs m (str (char cp)))))
+    [codes strs]))
+
+;; ---------------------------------------------------------------------------
 ;; screen
 
 (def WORLD 48.0)
@@ -78,7 +115,9 @@
         oy (if framed? (+ 2 (quot (- tr rows 2) 2)) 1)
         npx (* S S)
         ncell (* cols rows)
-        ovr (int-array npx)]
+        ovr (int-array npx)
+        gmode @glyph-mode
+        [gcode gstr] (glyph-tables gmode)]
     (dotimes [i npx] (aset ovr i -1))
     {:k k :S S :cols cols :rows rows :ox ox :oy oy :framed? framed?
      :tc tc :tr tr :panel-x (+ ox cols 3)
@@ -88,6 +127,9 @@
      :rmark (int-array rows) :prmark (int-array rows)
      :ptop (int-array ncell) :pbot (int-array ncell) :pglyph (int-array ncell)
      :tglyph (object-array ncell) :tcol (int-array ncell)
+     :gmode gmode :gcode gcode :gstr gstr  ; sub-cell sprite glyphs
+     :smask (int-array ncell) :scol (int-array ncell)
+     :chord (double-array 32)      ; shape-disc! scanline scratch: lo 0.., hi 16..
      :xf (double-array 3)         ; [cos sin identity?] of the field angle
      :wcache (int-array npx)      ; posterized static colour per *world* pixel
      :sgr-cache (volatile! {})
@@ -176,10 +218,10 @@
 ;; ---------------------------------------------------------------------------
 ;; sprites
 
-(defn glow!
-  "Additive light: a solid core of radius `core` and a 1/d^2 halo out to `rad`
-   (world units), colour c scaled by intensity. World-space position."
-  [scr ^double wx ^double wy ^double rad ^double core c ^double inten]
+(defn- glow*
+  "glow! with the core fill `fin` and a halo scale `hs` (1.0 1.0 = glow!)."
+  [scr ^double wx ^double wy ^double rad ^double core c ^double inten
+   ^double fin ^double hs]
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         [sx sy] (w->s scr wx wy)
         cx (* sx k) cy (* sy k)
@@ -198,8 +240,8 @@
             (when (<= x x1)
               (let [dx (* (- (+ x 0.5) cx) kinv) d2 (+ (* dx dx) dy2)]
                 (when (< d2 rad2)
-                  (let [f (if (< d2 core2) 1.0
-                              (* (/ core2 d2) (- 1.0 (/ d2 rad2))))
+                  (let [f (if (< d2 core2) fin
+                              (* hs (/ core2 d2) (- 1.0 (/ d2 rad2))))
                         i (+ x row)]
                     (aset ar i (+ (aget ar i) (* r f)))
                     (aset ag i (+ (aget ag i) (* g f)))
@@ -208,6 +250,93 @@
                     (aset rmark cyc 1))))
               (recur (inc x)))))
         (recur (inc y))))))
+
+(defn glow!
+  "Additive light: a solid core of radius `core` and a 1/d^2 halo out to `rad`
+   (world units), colour c scaled by intensity. World-space position."
+  [scr ^double wx ^double wy ^double rad ^double core c ^double inten]
+  (glow* scr wx wy rad core c inten 1.0 1.0))
+
+(defn shape-disc!
+  "Hard-edged sub-cell silhouette of a disc (world centre, world radius).
+   Each subcell is set when the disc covers at least half its area (the disc's
+   chord is integrated over a few scanlines per subcell row, in screen-pixel
+   space, so it follows the field's rotation). Covered cells OR their mask in;
+   compose! draws them as the quadrant/sextant glyph for that mask with
+   fg = bg + c (c is light added on top of the cell, like glow!'s core).
+   No-op in glyph mode 0."
+  [scr ^double wx ^double wy ^double rad c]
+  (let [mode (:gmode scr)]
+    (when (> mode 0)
+      (let [k (:k scr) cols (:cols scr) rows (:rows scr)
+            [sx sy] (w->s scr wx wy)
+            cx (* sx k) cy (* sy k) r (* rad k) r2 (* r r)
+            nr (if (= mode 2) 3 2)        ; subcell rows per cell
+            sr 2                          ; scanlines per subcell row
+            step (/ 2.0 nr)               ; subcell height, px
+            sstep (/ step sr)
+            half (* 0.25 sr)              ; half of a subcell's area, in scanline-px
+            x0 (max 0 (int (math/floor (- cx r)))) x1 (min (dec cols) (int (math/floor (+ cx r))))
+            y0 (quot (max 0 (int (math/floor (- cy r)))) 2)
+            y1 (min (dec rows) (quot (max 0 (int (math/floor (+ cy r)))) 2))
+            smask (:smask scr) scol (:scol scr) mark (:mark scr) rmark (:rmark scr)
+            chord (:chord scr)]
+        (loop [uy y0]
+          (when (<= uy y1)
+            (let [row (* uy cols) ytop (- (+ (* 2.0 uy) (* 0.5 sstep)) cy) ns (* nr sr)]
+              ;; the disc's chord [lo,hi] on each scanline of this cell row
+              (dotimes [q ns]
+                (let [dy (+ ytop (* sstep q)) h2 (- r2 (* dy dy))
+                      hw (if (> h2 0.0) (math/sqrt h2) 0.0)]
+                  (aset chord q (- cx hw))
+                  (aset chord (+ q 16) (+ cx hw))))
+              (loop [ux x0]
+                (when (<= ux x1)
+                  (let [xa (* 1.0 ux) xm (+ xa 0.5) xb (+ xa 1.0)
+                        m (loop [j 0 m 0]
+                            (if (< j nr)
+                              (let [q0 (* j sr) q1 (+ q0 sr)
+                                    cl (loop [q q0 acc 0.0]
+                                         (if (< q q1)
+                                           (recur (inc q) (+ acc (max 0.0 (- (min (aget chord (+ q 16)) xm) (max (aget chord q) xa)))))
+                                           acc))
+                                    crr (loop [q q0 acc 0.0]
+                                          (if (< q q1)
+                                            (recur (inc q) (+ acc (max 0.0 (- (min (aget chord (+ q 16)) xb) (max (aget chord q) xm)))))
+                                            acc))
+                                    m (if (> cl half) (bit-or m (bit-shift-left 1 (* 2 j))) m)
+                                    m (if (> crr half) (bit-or m (bit-shift-left 2 (* 2 j))) m)]
+                                (recur (inc j) m))
+                              m))]
+                    (when (not (= 0 m))
+                      (let [i (+ ux row)]
+                        (aset smask i (bit-or (aget smask i) m))
+                        (aset scol i c)
+                        (aset mark i 1)
+                        (aset rmark uy 1))))
+                  (recur (inc ux)))))
+            (recur (inc uy))))))))
+
+(def ^:private BALL-HALO
+  "Halo scale for glyph-mode balls: the glyph carries the bright core, so the
+   halo starts dimmer and the silhouette reads against it."
+  0.45)
+
+(def ^:private BALL-CORE
+  "Core light added over the glyph cell's bg; with the halo underneath it
+   lands close to glow!'s saturated core colour."
+  0.75)
+
+(defn ball!
+  "A ball: same arguments as glow!. Glyph mode 0 is exactly glow!; otherwise
+   the halo goes to the light buffer (dimmed, flat inside the core) and the
+   core becomes a sub-cell glyph silhouette."
+  [scr ^double wx ^double wy ^double rad ^double core c ^double inten]
+  (if (= 0 (:gmode scr))
+    (glow* scr wx wy rad core c inten 1.0 1.0)
+    (let [edge (* BALL-HALO (- 1.0 (/ (* core core) (* rad rad))))]
+      (glow* scr wx wy rad core c inten edge BALL-HALO)
+      (shape-disc! scr wx wy core (scale c (* BALL-CORE inten))))))
 
 (defn rect!
   "Solid rectangle in *screen frame* units (not rotated), horizontally
@@ -287,6 +416,7 @@
         mark (:mark scr) pmark (:pmark scr) rmark (:rmark scr) prmark (:prmark scr)
         ptop (:ptop scr) pbot (:pbot scr) pglyph (:pglyph scr)
         tglyph (:tglyph scr) tcol (:tcol scr)
+        smask (:smask scr) scol (:scol scr) gcode (:gcode scr) gstr (:gstr scr)
         cache (:sgr-cache scr)
         stats (:stats scr)
         start-len (.length sb)
@@ -335,7 +465,11 @@
                                 (px cx y0))
                           bot (if coarse? top (px cx y1))
                           tg (aget tglyph i)
-                          gl (if tg (int (first tg)) 0x2580)]
+                          sm (if tg 0 (aget smask i))
+                          ;; sprite glyphs diff on code AND colour (bits 21+)
+                          gl (if tg (int (first tg))
+                                 (if (= 0 sm) 0x2580
+                                     (bit-or (aget gcode sm) (bit-shift-left (aget scol i) 21))))]
                       (aset ovr (+ cx (* y0 S)) -1)
                       (aset ovr (+ cx (* y1 S)) -1)
                       (when (not (and (= top (aget ptop i)) (= bot (aget pbot i))
@@ -354,13 +488,23 @@
                             (when (not (= tc (aget v 1))) (.append sb (sgr-str cache tc false)) (aset v 1 tc))
                             (when (not (= avg (aget v 2))) (.append sb (sgr-str cache avg true)) (aset v 2 avg))
                             (.append sb tg))
+                          (if (= 0 sm)
                           (if (= top bot)
                             (do (when (not (= bot (aget v 2))) (.append sb (sgr-str cache bot true)) (aset v 2 bot))
                                 (.append sb " "))
                             (do (when (not (= top (aget v 1))) (.append sb (sgr-str cache top false)) (aset v 1 top))
                                 (when (not (= bot (aget v 2))) (.append sb (sgr-str cache bot true)) (aset v 2 bot))
-                                (.append sb HALF)))))
-                      (aset tglyph i nil)))
+                                (.append sb HALF)))
+                          ;; sprite glyph: bg = the darker pixel, fg = bg + sprite light
+                          (let [sc (aget scol i)
+                                bc (if (< (+ (cr top) (cg top) (cb top)) (+ (cr bot) (cg bot) (cb bot)))
+                                     top bot)
+                                fc (post (+ (cr bc) (cr sc)) (+ (cg bc) (cg sc)) (+ (cb bc) (cb sc)))]
+                            (when (not (= fc (aget v 1))) (.append sb (sgr-str cache fc false)) (aset v 1 fc))
+                            (when (not (= bc (aget v 2))) (.append sb (sgr-str cache bc true)) (aset v 2 bc))
+                            (.append sb (aget gstr sm))))))
+                      (aset tglyph i nil)
+                      (aset smask i 0)))
                   (aset pmark i (aget mark i))
                   (aset mark i 0))
                 (recur (inc cx))))))

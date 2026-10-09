@@ -11,6 +11,7 @@
             "--skip-card" (recur (rest as) (assoc o :skip-card true))
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))
             "--seconds" (recur (drop 2 as) (assoc o :seconds (parse-double b)))
+            "--glyphs" (recur (drop 2 as) (assoc o :glyphs (keyword b)))   ; quadrant|sextant|off
             "--stats" (recur (rest as) (assoc o :hud-stats true))
             (recur (rest as) o))))))
 

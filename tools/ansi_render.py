@@ -5,8 +5,9 @@
     uv run --with pillow tools/ansi_render.py gif  out.gif  f1.ans f2.ans ... [--ms 80]
     uv run --with pillow tools/ansi_render.py html out.html frame.ans [--title T]
 
-Half blocks are drawn as two exact colour rectangles, so the PNG shows the
-game's square-pixel raster the way a good terminal font would.
+Half blocks, quadrants (U+2596-259F) and sextants (U+1FB00-1FB3B) are drawn
+as exact filled sub-rectangles, so the PNG shows the game's square-pixel
+raster and sub-cell sprites the way a good terminal font would.
 """
 import html
 import re
@@ -64,6 +65,26 @@ def parse(text):
     return rows
 
 
+# Sub-cell block glyphs -> (columns, rows, mask). Bit 2*row+col, as in gfx.lg.
+QUAD = "\u0020\u2598\u259d\u2580\u2596\u258c\u259e\u259b\u2597\u259a\u2590\u259c\u2584\u2599\u259f\u2588"
+BLOCKS = {ch: (2, 2, m) for m, ch in enumerate(QUAD) if ch != " "}
+for _m in range(1, 63):
+    if _m in (21, 42):
+        continue
+    BLOCKS[chr(0x1FB00 + _m - 1 - (_m > 21) - (_m > 42))] = (2, 3, _m)
+
+
+def draw_block(d, x0, y0, spec, fg):
+    """Fill the set subcells exactly (sextant rows split 16px as 5/6/5)."""
+    nc, nr, m = spec
+    xs = [x0 + CW * i // nc for i in range(nc + 1)]
+    ys = [y0 + round(CH * j / nr) for j in range(nr + 1)]
+    for j in range(nr):
+        for i in range(nc):
+            if m >> (2 * j + i) & 1:
+                d.rectangle([xs[i], ys[j], xs[i + 1] - 1, ys[j + 1] - 1], fill=fg)
+
+
 def to_image(rows, font):
     from PIL import Image, ImageDraw
 
@@ -74,12 +95,9 @@ def to_image(rows, font):
         for x, (ch, fg, bg) in enumerate(row):
             x0, y0 = x * CW, y * CH
             d.rectangle([x0, y0, x0 + CW - 1, y0 + CH - 1], fill=bg)
-            if ch == "▀":
-                d.rectangle([x0, y0, x0 + CW - 1, y0 + CH // 2 - 1], fill=fg)
-            elif ch == "▄":
-                d.rectangle([x0, y0 + CH // 2, x0 + CW - 1, y0 + CH - 1], fill=fg)
-            elif ch == "█":
-                d.rectangle([x0, y0, x0 + CW - 1, y0 + CH - 1], fill=fg)
+            spec = BLOCKS.get(ch)
+            if spec:
+                draw_block(d, x0, y0, spec, fg)
             elif ch != " ":
                 d.text((x0, y0 + 1), ch, fill=fg, font=font)
     return img
