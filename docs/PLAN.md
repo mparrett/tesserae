@@ -2,7 +2,7 @@
 
 Started 2026-10-09 on let-go upstream `a13e042`.
 
-## v0: a playable slice across the whole brief (this phase)
+## v0: a playable slice across the whole brief (done)
 
 Goal: every headline idea is playable in at least one level, inside a story frame, on a
 renderer good enough to show off the rotation.
@@ -23,34 +23,41 @@ renderer good enough to show off the rotation.
 - [x] Capture tooling: tmux → PNG/GIF, level runner, autopilot
 - [x] AOT-lowered `lg` for the raster hot paths (optional binary, `tools/build-aot.sh`)
 
-## v1: depth and feel
+## v1: depth and feel (done)
 
-- **Yars-style boss** ("the Qotile of the Grout"): a core behind a scrolling, regenerating
-  shield of cells, a shimmering neutral-zone band where the Spark's colour and spin
-  scramble, and a rotation every few seconds.
-- **Shape-aware sprite glyphs** (shapescii lineage): balls and particles drawn with quadrant
-  or sextant glyphs chosen by a 2×3 coverage bitmask, giving four to six times the effective
-  resolution on hard-edged sprites. A table lookup, no codebook; gate sextants on font
-  support.
-- More reverse-mode puzzles: blueprints with line clears (Tetris rows) and a falling
-  "mortar" piece you steer into place.
-- Ball materials: glass (shatters into three on the trowel), ghost (passes through one tile),
-  sticky.
-- Persistent best scores and an unlocked-level list via let-go `storage`.
-- Difficulty pass: per-level par times, a 3-star medal, a lives tuning pass after
-  playtesting.
-- Sound (OSC bell patterns or the xsofy audio module in the browser build).
+- [x] **Yars-style boss**: 6.2 The Grout Core, with a scrolling, regenerating shield, a
+      neutral zone, a homing Destroyer and the Swirl. No field rotation (deferred: the band
+      would need a screen-frame overlay).
+- [x] **Shape-aware sprite glyphs**: `--glyphs quadrant|sextant|off`; the coverage bitmask is
+      the glyph index.
+- [x] **Falling mortar piece with line clears**: 3.3 Mortar Well. Blueprint pieces snap whole
+      when struck.
+- [x] **Ball materials**: glass (shatters into three) and ghost (passes three tiles). Sticky
+      is deferred; the magnet trowel already covers catching.
+- [x] **Saved progress**: best scores, unlocks and per-level records via let-go `storage`.
+- [x] **Difficulty pass**: par times and gold/silver/bronze medals, a flawless bonus, sim
+      sweeps (`tools/sim.lg`), "singing" last tiles, +20% spark speed.
+- [ ] Sound: deferred. A terminal has no good channel, and the browser build would need the
+      xsofy audio module.
 
-## v2: platforms and reach
+## v2: platforms and reach (done, with follow-ups)
 
-- WASM/xterm.js build (`lg -w`) via the joint-xsofy shell, for a shareable URL. Needs
-  `key-pending?` polling, which the loop already uses.
-- A level editor that writes the ASCII map format.
-- An Orrery mode in the spirit of Turing Tumble: marble logic gates built from tiles
-  (switch, crossover, bit) with puzzles solved by tilting. **Done (v2/orrery):** bonus
-  chapter VII · THE ORRERY (7.1 Escapement, 7.2 Gearwork, 7.3 Counting House), opened by
-  clearing 6.2. Next: more parts (an interrupt that stops the hopper, a trigger that
-  releases the next marble), a puzzle that needs both lanes and a gear, editor support.
+- [x] **Browser build** (`lg -w`, xterm.js): `tools/serve-web.sh`. Follow-ups: saving
+      progress (let-go's storage needs a bridge into the worker), and frame rate (the
+      Go-wasm VM is 3–5× slower).
+- [x] **Level editor**: `--edit [file]`, EDN custom maps, `--map file`, in-process play-test.
+      Follow-ups: in-editor naming, boss and Orrery parts in the palette, mouse painting.
+- [x] **Orrery**: bonus chapter VII · THE ORRERY (7.1 Escapement, 7.2 Gearwork, 7.3 Counting
+      House), opened by clearing 6.2. Follow-ups: more parts (an interrupt, a trigger), a
+      puzzle that needs both lanes and a gear, editor support.
+
+## Next (v3 candidates)
+
+- Rotation on the boss level (a screen-frame neutral-zone overlay).
+- A mortar fall that speeds up with progress, and a landing shadow for the piece.
+- An adaptive raster size for the browser, and IndexedDB storage once let-go supports it.
+- Re-lowering `compose!` once the typeinfer slowdown is fixed (the earlier full AOT build
+  measured 71 → 32 ms on a rotated frame).
 
 ## Performance notes
 
