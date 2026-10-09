@@ -155,7 +155,7 @@
 
 (defn sample
   "Static colour at world point (wx, wy)."
-  [wx wy]
+  [^double wx ^double wy]
   (if (or (< wx 0.0) (>= wx 48.0) (< wy 0.0) (>= wy 48.0))
     @outside
     (let [hx (* wx 0.5) hy (* wy 0.5)

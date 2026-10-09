@@ -30,12 +30,12 @@
 (defn cg [c] (bit-and (bit-shift-right c 8) 255))
 (defn cb [c] (bit-and c 255))
 
-(defn clamp8 [x] (if (> x 255) 255 (if (< x 0) 0 (int x))))
+(defn clamp8 [x] (let [x (double x)] (if (> x 255.0) 255 (if (< x 0.0) 0 (int x)))))
 
-(defn scale [c f]
+(defn scale [c ^double f]
   (rgb (clamp8 (* (cr c) f)) (clamp8 (* (cg c) f)) (clamp8 (* (cb c) f))))
 
-(defn mix [a b t]
+(defn mix [a b ^double t]
   (let [s (- 1.0 t)]
     (rgb (clamp8 (+ (* s (cr a)) (* t (cr b))))
          (clamp8 (+ (* s (cg a)) (* t (cg b))))
@@ -133,19 +133,19 @@
 (defn invalidate! [scr] (reset! (:full scr) true))
 
 ;; world -> screen units (unscaled), and back. Rotation about (24,24).
-(defn w->s [scr wx wy]
+(defn w->s [scr ^double wx ^double wy]
   (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
         dx (- wx HALFW) dy (- wy HALFW)]
     [(+ HALFW (- (* c dx) (* s dy))) (+ HALFW (+ (* s dx) (* c dy)))]))
 
-(defn s->w [scr sx sy]
+(defn s->w [scr ^double sx ^double sy]
   (let [xf (:xf scr) c (aget xf 0) s (aget xf 1)
         dx (- sx HALFW) dy (- sy HALFW)]
     [(+ HALFW (+ (* c dx) (* s dy))) (+ HALFW (- (* c dy) (* s dx)))]))
 
 (defn rot-vec
   "Rotate a vector world->screen (sign 1) or screen->world (sign -1)."
-  [scr vx vy sign]
+  [scr ^double vx ^double vy sign]
   (let [xf (:xf scr) c (aget xf 0) s (* sign (aget xf 1))]
     [(- (* c vx) (* s vy)) (+ (* s vx) (* c vy))]))
 
@@ -177,7 +177,7 @@
 (defn glow!
   "Additive light: a solid core of radius `core` and a 1/d^2 halo out to `rad`
    (world units), colour c scaled by intensity. World-space position."
-  [scr wx wy rad core c inten]
+  [scr ^double wx ^double wy ^double rad ^double core c ^double inten]
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         [sx sy] (w->s scr wx wy)
         cx (* sx k) cy (* sy k)
@@ -210,7 +210,7 @@
 (defn rect!
   "Solid rectangle in *screen frame* units (not rotated), horizontally
    anti-aliased so a paddle at a fractional x still moves smoothly."
-  [scr x0 y0 x1 y1 c]
+  [scr ^double x0 ^double y0 ^double x1 ^double y1 c]
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         px0 (* x0 k) px1 (* x1 k)
         ix0 (max 0 (int (math/floor px0))) ix1 (min (dec S) (int (math/floor px1)))
