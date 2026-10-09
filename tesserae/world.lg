@@ -21,6 +21,7 @@
 (def tdot (int-array N))
 (def tkind (int-array N))   ; tetromino letter (char code) for ghosts / sets
 (def bgc (int-array N))     ; background per tile
+(def tjoin (int-array N))   ; neighbour joins: 1 left 2 up 4 right 8 down
 
 (def outside (atom 0x07070c))
 (def on-change (atom (fn [tx ty] nil)))
@@ -78,7 +79,36 @@
   (aset thl i (gfx/mix base 0xffffff 0.38))
   (aset tsh i (gfx/scale base 0.55)))
 
-(defn changed! [i] (@on-change (mod i G) (quot i G)))
+(defn- joined? [i j]
+  (let [a (aget tt i) b (aget tt j)]
+    (and (not= a 0) (not= b 0)
+         (or (and (pos? (aget tpiece i)) (== (aget tpiece i) (aget tpiece j)))
+             (and (== a 3) (== b 3))))))
+
+(defn- join-mask [i]
+  (let [x (mod i G) y (quot i G)]
+    (bit-or (bit-or (if (and (pos? x) (joined? i (dec i))) 1 0)
+                    (if (and (pos? y) (joined? i (- i G))) 2 0))
+            (bit-or (if (and (< x (dec G)) (joined? i (inc i))) 4 0)
+                    (if (and (< y (dec G)) (joined? i (+ i G))) 8 0)))))
+
+(def batch? (atom false))
+
+(defn changed!
+  "Tile i changed: refresh its join mask and its neighbours', and tell the
+   renderer. During a level load the work is batched."
+  [i]
+  (when-not @batch?
+    (let [x (mod i G) y (quot i G)]
+      (aset tjoin i (join-mask i))
+      (@on-change x y)
+      (doseq [[dx dy] [[-1 0] [1 0] [0 -1] [0 1]]]
+        (let [nx (+ x dx) ny (+ y dy)]
+          (when (and (>= nx 0) (< nx G) (>= ny 0) (< ny G))
+            (let [j (+ nx (* ny G)) m (join-mask j)]
+              (when (not= m (aget tjoin j))
+                (aset tjoin j m)
+                (@on-change nx ny)))))))))
 
 (defn put! [i t base]
   (aset tt i t)
@@ -138,14 +168,17 @@
           ;; pegboard dot at each tile's corner
           (if (and (< u 0.26) (< v 0.26)) (gfx/add b 0x0d0d12) b))
         (case t
-          4 (let [b (aget bgc i)
-                  ring (or (< u 0.3) (< v 0.3) (> u 0.7) (> v 0.7))]
-              (gfx/mix b (aget tbase i) (if ring 0.42 0.12)))
+          4 (let [b (aget bgc i) j (aget tjoin i)
+                  ring (or (and (< u 0.3) (zero? (bit-and j 1))) (and (< v 0.3) (zero? (bit-and j 2)))
+                           (and (> u 0.7) (zero? (bit-and j 4))) (and (> v 0.7) (zero? (bit-and j 8))))]
+              (gfx/mix b (aget tbase i) (if ring 0.5 0.1)))
           9 (let [du (- u 0.5) dv (- v 0.5) d (+ (* du du) (* dv dv))]
               (if (< d 0.12) 0x000000 (if (< d 0.2) 0x14141a 0x24242c)))
-          (let [s (+ u v)]
-            (cond (< s 0.6) (aget thl i)
-                  (> s 1.4) (aget tsh i)
+          (let [j (aget tjoin i)]
+            (cond (or (and (< u 0.3) (zero? (bit-and j 1))) (and (< v 0.3) (zero? (bit-and j 2))))
+                  (aget thl i)
+                  (or (and (> u 0.7) (zero? (bit-and j 4))) (and (> v 0.7) (zero? (bit-and j 8))))
+                  (aget tsh i)
                   (and (> u 0.2) (< u 0.8) (> v 0.2) (< v 0.8)) (aget tdot i)
                   :else (aget tbase i))))))))
 
@@ -216,6 +249,7 @@
   (doseq [[y r] (map-indexed vector rows)]
     (assert (= G (count r)) (str "row " y " is " (count r) " chars: " r)))
   (seed! seed)
+  (reset! batch? true)
   (reset! outside (get theme :outside 0x07070c))
   (let [bg0 (:bg0 theme) bg1 (:bg1 theme)
         [fill-n id1] (pack-tetrominoes! rows \? 0)
@@ -242,4 +276,6 @@
             (contains? simple-legend ch) (let [[t c] (simple-legend ch)] (put! i t c))
             (= ch \B) (swap! starts conj [(+ 1.0 (* 2 x)) (+ 1.0 (* 2 y))])
             :else nil))))
+    (reset! batch? false)
+    (dotimes [i N] (aset tjoin i (join-mask i)))
     {:starts @starts}))

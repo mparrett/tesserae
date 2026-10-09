@@ -98,8 +98,8 @@
 ;; ---------------------------------------------------------------------------
 ;; tile hits -> rules
 
-(defn piece-done! [i types word bonus]
-  (let [p (aget w/tpiece i)]
+(defn piece-done! [i p types word bonus]
+  (do
     (when (and (pos? p) (zero? (w/piece-left p types)))
       (let [[cx cy] (w/tile-center i)]
         (add-score! bonus)
@@ -113,6 +113,7 @@
   (let [t (aget w/tt i)
         [cx cy] (w/tile-center i)
         c (aget w/tbase i)
+        piece (aget w/tpiece i)
         combo (:combo @S)
         mult (+ 1.0 (* 0.5 (quot combo 5)))
         brk (fn [pts]
@@ -125,10 +126,8 @@
               (swap! S assoc :goal-dirty true))]
     (cond
       (or (= t w/NORM) (= t w/RUBBER) (= t w/LEAD) (= t w/MITO))
-      (do (aset w/tt i 0) ; so piece-left sees it gone before clear! repaints
-          (aset w/tt i t)
-          (brk 10)
-          (when (= t w/NORM) (piece-done! i #{w/NORM} "SET" 100))
+      (do (brk 10)
+          (when (= t w/NORM) (piece-done! i piece #{w/NORM} "SET" 100))
           (case t 5 :split 6 :rubber 7 :lead nil))
 
       (or (= t w/HARD) (= t w/MAGNET))
@@ -145,7 +144,7 @@
           (add-score! 15)
           (burst! cx cy (aget w/tbase i) 10 12.0)
           (swap! S assoc :goal-dirty true)
-          (piece-done! i #{w/GHOST} "LAID" 120)
+          (piece-done! i piece #{w/GHOST} "LAID" 120)
           nil)
 
       :else (do (burst! cx cy 0x8090a0 2 6.0)
@@ -804,7 +803,9 @@
         acc (:card-accent st 0xffd27a)]
     (when (:card-fresh st)
       (swap! S assoc :card-fresh false)
-      (gfx/reset-sgr! sb) (gfx/bg! sb 0x05050a) (.append sb (str gfx/ESC "[2J")))
+      (gfx/reset-sgr! sb) (gfx/bg! sb 0x05050a)
+      (let [blank (apply str (repeat tc " "))]
+        (dotimes [y tr] (gfx/at sb 1 (inc y)) (.append sb blank))))
     (gfx/bg! sb 0x05050a)
     (gfx/at sb x0 y0) (gfx/fg! sb acc) (.append sb title)
     (gfx/at sb x0 (inc y0)) (gfx/fg! sb (gfx/scale acc 0.4))
@@ -896,7 +897,7 @@
         (contains? #{:q :esc} k) (to-title!)
         (= k :p) (do (swap! S assoc :mode :pause) (banner! "PAUSED" 0xffffff 1e9))
         (= k :r) (enter-level! (:li st))
-        (= k :rbracket) (level-won!)
+        (= k (keyword "]")) (level-won!)
         (contains? #{:space :click} k)
         (cond (some :stuck (:balls st)) (launch!)
               (lv :tilt) (swap! S assoc :tilt [0.0 0.0])
