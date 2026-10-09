@@ -1,12 +1,32 @@
-# TESSERAE
+<p align="center">
+  <img src="docs/banner.gif" alt="TESSERAE: the wordmark set from bevelled tetromino-coloured tiles, then rung by a passing Spark" width="740">
+</p>
 
-A lunch-break mosaic breaker for the terminal, written in [let-go](https://github.com/nooga/let-go).
+<p align="center"><i>A lunch-break mosaic breaker for the terminal, written in <a href="https://github.com/nooga/let-go">let-go</a>.</i></p>
 
 > Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the
 > sky's memory. Then the Grout came. You are the last Lapidary. You carry a Trowel and a
 > Spark. Break what is dead. Set what is lost. Turn the sky.
 
-![title](docs/captures/m1-title.png)
+<p align="center">
+  <img src="docs/captures/v0-rotation.gif" alt="Quarter Turn: the whole field rotates ninety degrees mid-rally while the trowel stays put" width="594">
+  <br><sub>Every cell is two square pixels, so the field is a real raster. Here it turns a quarter while the Spark is in flight.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/captures/v0-first-light.gif" alt="First Light: a wall of interlocking tetrominoes"><br><sub><b>I · The Chipping</b>: walls of packed tetrominoes; clear a whole piece for a SET bonus</sub></td>
+    <td width="50%"><img src="docs/captures/v1-well.gif" alt="Mortar Well: a falling tetromino shoved and turned by the ball"><br><sub><b>III · The Setting</b>: reverse breakout and a Tetris well you shove and turn with the Spark</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/captures/v0-tilt.gif" alt="Tilt Table: a marble rolling through a labyrinth"><br><sub><b>IV · The Tilt</b>: no trowel; tilt the table to roll marbles to every lamp</sub></td>
+    <td><img src="docs/captures/boss.gif" alt="The Grout Core boss behind a scrolling shield and a rainbow neutral zone"><br><sub><b>VI · The Heart</b>: the Grout Core, behind a scrolling shield and a neutral zone</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/captures/v2-orrery.gif" alt="The Orrery: marbles flipping bits and filling cups"><br><sub><b>VII · The Orrery</b>: marble logic in the spirit of Turing Tumble</sub></td>
+    <td><img src="docs/captures/v0-heart.gif" alt="The Heart: sparks breaking out of a walled ring"><br><sub><b>VI · The Heart</b>: the Spark starts walled in, and you steer one borrowed tile</sub></td>
+  </tr>
+</table>
 
 ## Play
 
