@@ -665,7 +665,7 @@
         (dotimes [j (dec n)]
           (let [[x y] (nth tr j) f (/ (inc j) (* 1.0 n))]
             (gfx/glow! sc x y 1.4 0.4 c (* 0.22 f))))
-        (gfx/glow! sc (:x b) (:y b) 3.4 BR c 1.0)))
+        (gfx/ball! sc (:x b) (:y b) 3.4 BR c 1.0)))
     ;; lodestone shimmer
     (doseq [[x y] (:lodes st)]
       (when (= w/MAGNET (w/tile-at (int (* 0.5 x)) (int (* 0.5 y))))
@@ -966,6 +966,7 @@
 
 (defn main! [o]
   (reset! opts o)
+  (gfx/set-glyph-mode! (get o :glyphs :quadrant))
   (let [[tc tr] (or (term/size) [100 30])]
     (reset! scr (gfx/make-screen tc tr PANEL-W)))
   (wire-world!)
