@@ -56,7 +56,8 @@ renderer good enough to show off the rotation.
 - Rotation on the boss level (a screen-frame neutral-zone overlay).
 - A mortar fall that speeds up with progress, and a landing shadow for the piece.
 - An adaptive raster size for the browser, and IndexedDB storage once let-go supports it.
-- Re-lowering `compose!` once the typeinfer slowdown is fixed (the earlier full AOT build
+- Re-lowering `compose!`: unblocked now that let-go#1051 has merged. It needs `wt/tesserae-aot`
+  rebased onto let-go tip, dropping the half of `a8c24ea` that #1044 covers (the earlier full AOT build
   measured 71 → 32 ms on a rotated frame).
 
 ## Performance notes
