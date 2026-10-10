@@ -10,8 +10,8 @@
 #   --out    output binary (default $TESSERAE_AOT_OUT, else ../lg-bin/lg-tesserae-aot)
 #   --lg     lg used to run the lowering (default: built from --letgo first, so
 #            the lowerer and the runtime the Go compiles against always match)
-#   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose!: without
-#            let-go#1051 its lowering runs over an hour; see let-go#1050)
+#   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose! on a
+#            let-go older than #1051, where lowering it runs over an hour; let-go#1050)
 #   --keep   leave the generated Go in the worktree (for reading it)
 #   NS       namespaces to lower (default: tesserae.gfx tesserae.world)
 #

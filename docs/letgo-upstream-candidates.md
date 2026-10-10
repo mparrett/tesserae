@@ -1,8 +1,8 @@
 # let-go upstream candidates found while building TESSERAE
 
 Working notes on let-go gaps hit while building the game. Filed so far: the AOT lowering
-blowup as nooga/let-go#1050, with the fix in nooga/let-go#1051. The rest are unfiled
-candidates.
+blowup as nooga/let-go#1050, fixed by nooga/let-go#1051 (merged 2026-10-10 as e9789b7).
+The rest are unfiled candidates.
 
 Verified against `lg` built from nooga/let-go `a13e042` (2026-10-09).
 
@@ -46,7 +46,7 @@ of their own.
      (`rt.InvokeGoOverrideFallback`).
 - `f01a7cd perf(ir)`: lowered code caches global var lookups (`rt.CachedVar`) instead of doing
   a namespace map lookup on every read.
-- **ROOT-CAUSED (2026-10-09), filed as #1050, fix in #1051: exponential `closure-info*` walk
+- **ROOT-CAUSED (2026-10-09), filed as #1050, fixed by #1051 (merged 2026-10-10): exponential `closure-info*` walk
   in Go emission, a regression from #767.** The 18 min → over 95 min `compose!` lowering isn't typeinfer. Typeinfer is
   healthy: about 2.1 enqueues per instruction (the #558 baseline), the same work counts on
   base, tip and tip+#1038/#1039, and 8–17 s total even on `compose!`. The time is in

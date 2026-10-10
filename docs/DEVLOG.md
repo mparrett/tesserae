@@ -375,3 +375,14 @@ one conflict, in the ball draw call, and both sides were kept.
   carry the original local paths; history was left unrewritten by choice.
 - MIT license added. `main` and `spike/table3d` are public. The repro branch stayed local, since
   its content lives in let-go #1050/#1051.
+
+## 2026-10-10: let-go#1051 merged
+
+- The closure-info fixpoint fix merged upstream as `e9789b7`; #1050 is closed. CI passed every
+  check, including `TestLoweringDeterminism`, which was too heavy to run locally, and nooga
+  approved it.
+- Docs updated: `AOT_SKIP=compose!` is now only needed on a let-go older than #1051. The fork
+  branch `wt/tesserae-aot` (on mparrett/let-go, pushed 2026-10-09) still predates it.
+- **next:** rebase `wt/tesserae-aot` onto tip (drop `a8c24ea` part 1, now covered by #1044;
+  refresh the generated manifest), rebuild without `AOT_SKIP`, and re-measure full-frame and 3D
+  tilting frames.
