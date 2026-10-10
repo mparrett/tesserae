@@ -241,12 +241,12 @@ namespace to the list:
 
 ```sh
 TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot-3d \
-  AOT_SKIP=compose! ./tools/build-aot.sh tesserae.gfx tesserae.world tesserae.table3d
+  ./tools/build-aot.sh tesserae.gfx tesserae.world tesserae.table3d
 LG=../lg-tesserae-aot-3d ./play.sh --level 4.3 --3d --stats
 ```
 
-On the AOT binary the board renders about 2.5× faster; `compose!` (still on the VM) becomes
-the limit while tilting.
+On the full AOT binary a tilting frame takes about 19 ms (median, High Table, k=2; 35 ms on the
+VM), so tilting holds around 50 fps.
 
 ## AOT build (optional)
 
