@@ -13,6 +13,8 @@
 #   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose! on a
 #            let-go older than #1051, where lowering it runs over an hour; let-go#1050)
 #   --keep   leave the generated Go in the worktree (for reading it)
+#   LG_CPUPROFILE=<file> [LG_CPUPROFILE_SECS=n]  env at RUN time: the built binary writes a
+#            Go CPU profile for n s (default 10); read it with `go tool pprof -top <bin> <file>`
 #   NS       namespaces to lower (default: tesserae.gfx tesserae.world)
 #
 # Mechanism (mirrors let-go benchmark/aot/build.lg): every defn/defn- of each
@@ -64,20 +66,21 @@ canonical="${TESSERAE_LETGO_CANONICAL:-$game/../let-go}"
 gen_root="$letgo/pkg/rt/core_go_lowered"
 gen_dir="$gen_root/tesserae"
 wireup="$letgo/zz_lg_tesserae_gen.go"
+profhook="$letgo/zz_lg_tesserae_prof.go"
 log="$(mktemp -t build-aot.XXXXXX)"
 
 cleanup() {
   if [[ $keep -eq 0 ]]; then
-    rm -f "$wireup"
+    rm -f "$wireup" "$profhook"
     rm -rf "$gen_dir"
     rmdir "$gen_root" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-if [[ -e "$gen_dir" || -e "$wireup" ]]; then
+if [[ -e "$gen_dir" || -e "$wireup" || -e "$profhook" ]]; then
   echo "build-aot: removing stale generated files from a previous run"
-  rm -rf "$gen_dir" "$wireup"
+  rm -rf "$gen_dir" "$wireup" "$profhook"
 fi
 
 if [[ -z "$host_lg" ]]; then
@@ -103,6 +106,46 @@ echo "build-aot: $lowered defn arities emitted as Go, $fallback fell back"
   grep '^AOT-PKG' "$log" | awk '{print "\t_ \"github.com/nooga/let-go/pkg/rt/core_go_lowered/" $2 "\""}'
   echo ")"
 } >"$wireup"
+
+# Opt-in CPU profiling for the built binary: LG_CPUPROFILE=<file> records a Go
+# CPU profile for LG_CPUPROFILE_SECS seconds (default 10), then stops and
+# flushes, however the program exits afterwards. Unset, it does nothing.
+cat >"$profhook" <<'GO'
+//go:build lg_tesserae
+
+package main
+
+import (
+	"os"
+	"runtime/pprof"
+	"strconv"
+	"time"
+)
+
+func init() {
+	path := os.Getenv("LG_CPUPROFILE")
+	if path == "" {
+		return
+	}
+	secs, err := strconv.Atoi(os.Getenv("LG_CPUPROFILE_SECS"))
+	if err != nil || secs <= 0 {
+		secs = 10
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		f.Close()
+		return
+	}
+	go func() {
+		time.Sleep(time.Duration(secs) * time.Second)
+		pprof.StopCPUProfile()
+		f.Close()
+	}()
+}
+GO
 
 echo "build-aot: go build -tags lg_tesserae -o $out ..."
 mkdir -p "$(dirname "$out")"
