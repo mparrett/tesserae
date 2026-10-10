@@ -220,24 +220,22 @@ git -C ../let-go-tesserae-aot checkout wt/tesserae-aot
 
 # 2. build the binary (Go toolchain required; about a minute)
 TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot \
-  AOT_SKIP=compose! ./tools/build-aot.sh
+  ./tools/build-aot.sh
 
 # 3. play on it
 LG=../lg-tesserae-aot ./play.sh --stats
 ```
 
-- `wt/tesserae-aot` is upstream let-go plus two commits: guarded native overrides for
-  functions with typed params (without it most hot functions silently stay on bytecode) and
-  cached var reads in lowered code. Part of the first commit is upstream now (#1044).
-- `AOT_SKIP=compose!` leaves the frame compositor on the VM. `wt/tesserae-aot` predates
-  [let-go#1051](https://github.com/nooga/let-go/pull/1051) (merged 2026-10-10), and without that
-  fix lowering `compose!` takes over an hour. On a let-go that has #1051 plus the
-  guarded-override commit, drop `AOT_SKIP`: `compose!` lowers in about a minute, and
-  full-frame redraws get about 2× faster.
+- `wt/tesserae-aot` is upstream let-go (including the #1051 lowering fix) plus two commits:
+  guarded native overrides for functions with typed params (without it most hot functions
+  silently stay on bytecode) and cached var reads in lowered code.
+- The whole build takes about 70 s. On a let-go older than
+  [let-go#1051](https://github.com/nooga/let-go/pull/1051), lowering `compose!` takes over an
+  hour; set `AOT_SKIP=compose!` there to leave it on the VM.
 - The binary replaces the game's functions by name, so rebuild it after editing `gfx.lg` or
   `world.lg`, or your edits won't run.
-- What to expect: sprites and sampling about 1.7× faster; full-field redraws (rotation, level
-  start) unchanged until `compose!` lowers too.
+- What to expect (k=2): full-field redraws about 2.3× faster (rotated frame 53–56 → 23–24 ms),
+  coarse rotation frames 2.6× (33–38 → 13–14 ms), idle compose about 3×.
 
 ## Tests
 

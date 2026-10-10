@@ -386,3 +386,19 @@ one conflict, in the ball draw call, and both sides were kept.
 - **next:** rebase `wt/tesserae-aot` onto tip (drop `a8c24ea` part 1, now covered by #1044;
   refresh the generated manifest), rebuild without `AOT_SKIP`, and re-measure full-frame and 3D
   tilting frames.
+
+## 2026-10-10: full AOT, compose! included
+
+- Rebased the fork branch `wt/tesserae-aot` onto let-go tip `e9789b7` (#1051), dropping the
+  half of `a8c24ea` that #1044 covers. The conflict resolved to upstream's `lower_go.lg` plus
+  the one `:variadic?` line the override commit needs. Manifest refreshed, and force-pushed to
+  mparrett/let-go with a lease (`f01a7cd → 8197b05`).
+- **result:** the full AOT build, `compose!` included, takes **72 s** (it ran over 95 min before
+  #1051). 62 arities are native and none fell back. Tests pass on the binary.
+- Benchmarks at k=2, ms (VM / partial AOT / full AOT): rotated full redraw 53–56 / 56 / 23–24;
+  redraw at rest 34–35 / 41 / 15–17; coarse rotation frame 33–38 / 34–36 / 13–14; idle
+  compose 0.30 / 0.3–0.5 / 0.09–0.17.
+- 3D spike (still on its branch), High Table tilting frame median: VM 35.5, partial 26, full
+  19 ms (about 50 fps); idle 0.01 ms.
+- `lg-tesserae-aot` is now the full build; the old partial ones are kept as `-partial`.
+  `AOT_SKIP` is only needed against a let-go older than #1051.
