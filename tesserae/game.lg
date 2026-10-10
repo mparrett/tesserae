@@ -531,6 +531,7 @@
     (when (:orrery l) (orrery-init! l))
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
+    (t3/set-mode! (:t3d-mode @opts))
     (if (view3d?) (t3/enable! @scr (lv :hmap)) (t3/disable! @scr))
     (spawn-balls!)
     (when (:ward l) (choose-ward!))
@@ -1468,9 +1469,20 @@
         [(clampf (/ dvx 6.0) -1.0 1.0) (clampf (/ dvy 6.0) -1.0 1.0)])
       [0.0 0.0])))
 
+(defn sweep-tilt
+  "--t3d-sweep: a fixed tilt path as a function of level time, for matched
+   captures of the 3D table variants. Flat for 0.5 s, then a Lissajous loop
+   (x period 3.2 s, y 4.8 s, 0.9 tilt amplitude)."
+  [t]
+  (let [u (max 0.0 (- t 0.5))]
+    [(* 0.9 (math/sin (* TAU (/ u 3.2)))) (* 0.9 (math/sin (* TAU (/ u 4.8))))]))
+
 (defn update-tilt! [dt]
-  (if (lv :orrery)
+  (cond
+    (:t3d-sweep @opts) (swap! S assoc :tilt (sweep-tilt (:time @S)))
+    (lv :orrery)
     (orrery-tilt! dt)
+    :else
   (let [ax (in/axis [:left :a :h] [:right :d :l])
         ay (in/axis [:up :w :k] [:down :s :j])
         [tx ty] (:tilt @S)

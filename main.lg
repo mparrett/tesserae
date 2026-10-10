@@ -12,6 +12,12 @@
                                            (assoc o :level-id b)
                                            (assoc o :level (dec (parse-long b)))))
             "--3d" (recur (rest as) (assoc o :view3d true))                ; 3D tilt table
+            ;; 3D table motion variants (experiments, off by default)
+            "--t3d-full-rows" (recur (rest as) (update o :t3d-mode (fnil conj #{}) :full-rows))
+            "--t3d-cell" (recur (rest as) (update o :t3d-mode (fnil conj #{}) :cell))
+            "--t3d-sharp" (recur (rest as) (update o :t3d-mode (fnil into #{}) [:full-rows :cell]))
+            "--t3d-detent" (recur (rest as) (update o :t3d-mode (fnil conj #{}) :detent))
+            "--t3d-sweep" (recur (rest as) (assoc o :t3d-sweep true))       ; scripted tilt path
             "--autoplay" (recur (rest as) (assoc o :autoplay true))
             "--skip-card" (recur (rest as) (assoc o :skip-card true))
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))

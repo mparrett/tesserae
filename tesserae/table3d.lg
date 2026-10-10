@@ -376,13 +376,13 @@
               :else (recur ix (+ iy sy) tmy (if (> sy 0) 36 37) tmx (+ tmy tdy)))))))))
 
 (defn render!
-  "Draw the board into (:b3 scr) in blocks of bs x bs pixels (bs 1 or 2),
-   for pixel rows y0, y0 + ystep, ... (each row renders a bs-tall band);
-   mark the cells whose colour changed."
-  [scr bs y0 ystep]
+  "Draw the board into (:b3 scr) in blocks of bw x bh pixels (2x2 coarse,
+   1x2 one sample per cell, 1x1 full), for pixel rows y0, y0 + ystep, ...
+   (each row renders a bh-tall band); mark the cells whose colour changed."
+  [scr bw bh y0 ystep]
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         b3 (:b3 scr) mark (:mark scr) rmark (:rmark scr)
-        kinv (/ 1.0 k) du (* bs kinv) half (* 0.5 bs)
+        kinv (/ 1.0 k) du (* bw kinv) half (* 0.5 bh)
         wc (:wcache scr) k2 (* 2.0 k) m0 (aget P 33) r2 (* SPEC-R SPEC-R)
         sx0 (aget P 38) sy0 (aget P 39)
         h00 (aget P 12) h01 (aget P 13) h02 (aget P 14)
@@ -395,7 +395,7 @@
     (loop [y y0]
       (when (< y S)
         (let [v (- (* (+ y half) kinv) 24.0)
-              u0 (- (* half kinv) 24.0)
+              u0 (- (* 0.5 bw kinv) 24.0)
               cy (quot y 2) crow (* cy cols) prow (* y S)]
           ;; homogeneous coordinates, stepped along the row
           (loop [x 0
@@ -416,12 +416,16 @@
                     i (+ x prow)]
                 (when (not (= c (aget b3 i)))
                   (aset b3 i c)
-                  (if (= bs 2)
+                  (cond
+                    (= bw 2)
                     (let [ci (+ x crow)]
                       (aset b3 (inc i) c) (aset b3 (+ i S) c) (aset b3 (+ i S 1) c)
                       (aset mark ci 1) (aset mark (inc ci) 1) (aset rmark cy 1))
+                    (= bh 2)
+                    (do (aset b3 (+ i S) c) (aset mark (+ x crow) 1) (aset rmark cy 1))
+                    :else
                     (do (aset mark (+ x crow) 1) (aset rmark cy 1)))))
-              (recur (+ x bs)
+              (recur (+ x bw)
                      (+ hx (* h00 du)) (+ hy (* h10 du)) (+ hw (* h20 du))
                      (+ fx (* f00 du)) (+ fy (* f10 du)) (+ fw (* f20 du))))))
         (recur (+ y ystep))))))
@@ -485,16 +489,30 @@
 (def ^:private todo (atom []))      ; render passes still owed to the current camera
 (def ^:private phase (atom 0))      ; which coarse half went first last time
 
-(def ^:private REFINE [[1 0 4] [1 1 4] [1 2 4] [1 3 4]])   ; full-res, a quarter per frame
+(def ^:private REFINE [[1 1 0 4] [1 1 1 4] [1 1 2 4] [1 1 3 4]])   ; full-res, a quarter per frame
+
+;; Motion variants (the blur-while-tilting experiment); none is the default.
+;;   :full-rows  motion frames render every row, not alternating halves
+;;   :cell       motion frames take one sample per cell (1x2), not per 2x2 block
+;;   :detent     the board angle moves in DETENT steps, each rendered at full
+;;               resolution at once (physics keeps the continuous tilt)
+(def mode (atom #{}))
+(def DETENT 0.1)
+
+(defn set-mode! [m] (reset! mode (set m)))
 
 (defn frame!
-  "Before the sprites, bring the board image up to date, one render pass per
-   frame. A tilt step (or a ringing column) moves the camera and renders half
-   the coarse block rows, alternating halves; a tile change re-renders all of
-   them. Once the camera holds, the other half and then four full-resolution
-   passes follow on later frames. Returns true when it rendered."
+  "Before the sprites, bring the board image up to date. A tilt step (or a
+   ringing column) moves the camera and renders: baseline, half the coarse
+   2x2 block rows, alternating halves (see `mode` for the variants); a tile
+   change re-renders all the coarse rows. Once the camera holds, the rest
+   follows one pass per frame: the other half, then four full-resolution
+   quarters. Returns true when it rendered."
   [scr tx ty]
-  (let [qx (* Q (math/round (/ tx Q))) qy (* Q (math/round (/ ty Q)))
+  (let [m @mode
+        det? (contains? m :detent)
+        q (if det? DETENT Q)
+        qx (* q (math/round (/ tx q))) qy (* q (math/round (/ ty q)))
         now (System/nanoTime)
         dt (min 0.05 (/ (- now @last-ns) 1e9))
         _ (reset! last-ns now)
@@ -507,20 +525,29 @@
           (reset! dirty false)
           (reset! last-scr scr)
           (camera! scr qx qy)
-          (render! scr 2 0 2)
+          (render! scr 2 2 0 2)
           (reset! todo REFINE)
           true)
+      (and moved? det?)
+      (do (camera! scr qx qy)
+          (render! scr 1 1 0 1)
+          (reset! todo [])
+          true)
       moved?
-      (let [p (- 2 @phase)]
-        (reset! phase p)
+      (let [bw (if (contains? m :cell) 1 2)]
         (camera! scr qx qy)
-        (render! scr 2 p 4)
-        (reset! todo (into [[2 (- 2 p) 4]] REFINE))
+        (if (contains? m :full-rows)
+          (do (render! scr bw 2 0 2)
+              (reset! todo REFINE))
+          (let [p (- 2 @phase)]
+            (reset! phase p)
+            (render! scr bw 2 p 4)
+            (reset! todo (into [[bw 2 (- 2 p) 4]] REFINE))))
         true)
       (seq @todo)
-      (let [[bs y0 ys] (first @todo)]
+      (let [[bw bh y0 ys] (first @todo)]
         (swap! todo #(subvec % 1))
-        (render! scr bs y0 ys)
+        (render! scr bw bh y0 ys)
         true)
       :else false)))
 

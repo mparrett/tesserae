@@ -233,7 +233,18 @@ TESS_STORAGE_ID=spike3d ./play.sh --3d   # keep spike runs out of your saved pro
 ```
 
 ← ↑ → ↓ tilt the table (it stays where you leave it), SPACE levels it. Motion frames render
-coarse and sharpen once the tilt holds. A terminal of 124×50 or more doubles the raster; the
+coarse and sharpen once the tilt holds.
+
+Experiments with how motion frames render (none is the default yet; see
+`docs/captures/spike-3d-variant-*`):
+
+```sh
+./play.sh --level 4.3 --t3d-full-rows   # every coarse row each motion frame (no interlace)
+./play.sh --level 4.3 --t3d-cell        # one sample per cell while moving (full width)
+./play.sh --level 4.3 --t3d-sharp       # both of the above
+./play.sh --level 4.3 --t3d-detent      # the board angle snaps in 0.1 steps, each at full res
+./play.sh --level 4.3 --t3d-sweep       # tilt follows a fixed path (matched captures)
+``` A terminal of 124×50 or more doubles the raster; the
 marble reads much better at 3–4× (around 220×80).
 
 To build an AOT binary for the spike, follow "AOT build (optional)" below and add the 3D

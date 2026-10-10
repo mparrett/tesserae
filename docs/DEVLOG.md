@@ -402,3 +402,23 @@ one conflict, in the ball draw call, and both sides were kept.
   19 ms (about 50 fps); idle 0.01 ms.
 - `lg-tesserae-aot` is now the full build; the old partial ones are kept as `-partial`.
   `AOT_SKIP` is only needed against a let-go older than #1051.
+
+## 2026-10-10: 3D table, sharper motion variants (spike/table3d)
+
+- The user found tilting blurry, so there are three switchable variants, none the default:
+  `--t3d-full-rows` (every coarse row each motion frame, no interlace), `--t3d-cell` (one sample
+  per cell while moving, interlaced), and `--t3d-detent` (the board angle snaps in 0.1 steps,
+  each rendered at full resolution; physics keeps the continuous tilt). `--t3d-sharp` is the
+  first two together, and `--t3d-sweep` drives the tilt along a fixed Lissajous path for
+  matched captures.
+- **Cost, moving frames along the sweep, mean ms (full AOT / VM):** baseline 20 / 45, full-rows
+  30 / 70, cell 33 / 68, sharp 41 / 108. Detent: 84 / 214 on the third of frames that cross a
+  detent, near zero otherwise. In play that's 9–14 fps, because a slow frame lets the next
+  frame cross another detent.
+- **Look:** baseline combs on wall edges (two tilt angles interleaved). Full-rows is coherent
+  but still 2×2-blocky. Cell sharpens every edge across the board but keeps the combing. Detent
+  is crisp but steps visibly.
+- Captures: `docs/captures/spike-3d-variant-{baseline,full-rows,cell,detent}.gif` (in game, AOT)
+  and `spike-3d-variant-grid.{gif,png}` (frame-synchronized offline, board only).
+- **next:** sharp (full rows + cell) on AOT at about 24 fps, or cell with full rows only when a
+  frame has budget. Coarser light quantization while moving would cut the cells compose emits.
