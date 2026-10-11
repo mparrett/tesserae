@@ -21,6 +21,7 @@
 (def held (atom {}))         ; key -> expiry ms, or :down (kitty)
 (def last-press (atom {}))   ; key -> ms
 (def mouse-x (atom nil))     ; last mouse column (1-based terminal col)
+(def mouse-y (atom nil))     ; last mouse row (1-based terminal row)
 (def mouse-moved (atom false))
 
 (def epoch (System/nanoTime))
@@ -98,7 +99,7 @@
             (nil? p) (recur evs)
             (= :mouse (first p))
             (let [m (second p)]
-              (reset! mouse-x (:x m)) (reset! mouse-moved true)
+              (reset! mouse-x (:x m)) (reset! mouse-y (:y m)) (reset! mouse-moved true)
               (recur (if (and (= :press (:action m)) (= :left (:button m)))
                        (conj evs [:click :press]) evs)))
             :else

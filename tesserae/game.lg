@@ -12,6 +12,7 @@
             [tesserae.levels :as L]
             [tesserae.meta :as M]
             [tesserae.table3d :as t3]
+            [tesserae.glass :as glass]
             [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -53,11 +54,17 @@
   []
   (boolean (and (lv :tilt) (or (lv :view3d) (:view3d @opts)))))
 
+(defn glass?
+  "The Glass House (spike): breakout inside a glass cube (tesserae.glass)."
+  []
+  (boolean (lv :glass)))
+
 (defn fill3d?
   "--t3d-fill: on a 3D level the arena takes the largest square that fits the
-   terminal (non-integer pixel scale; see gfx/make-screen)."
+   terminal (non-integer pixel scale; see gfx/make-screen). The Glass House
+   always does: it draws every screen pixel itself."
   []
-  (boolean (and (:t3d-fill @opts) (view3d?))))
+  (boolean (or (glass?) (and (:t3d-fill @opts) (view3d?)))))
 
 ;; meta layer hooks (defined in the "meta layer" section near the end)
 (declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?
@@ -125,7 +132,7 @@
           opp {:bottom :top :top :bottom :left :right :right :left}]
       (if (lv :twin) #{down (opp down)} #{down}))))
 
-(defn paddle-level? [] (not (or (lv :tilt) (lv :ward))))
+(defn paddle-level? [] (not (or (lv :tilt) (lv :ward) (lv :glass))))
 
 ;; ---------------------------------------------------------------------------
 ;; ball construction
@@ -492,10 +499,11 @@
             :core (max 0 (:core-hp @S 0))
             :lines (max 0 (- (get-in (lvl) [:well :lines] 6) (get-in @S [:well :lines] 0)))
             :orrery (orrery-goal-left)
+            :glass (glass/goal-left)
             0)]
     (swap! S assoc :goal-left n :goal-dirty false
            ;; the last tesserae sing: few goal tiles left -> they call the Spark
-           :singers (if (and (pos? n) (<= n 8) (not (lv :tilt)) (not= goal :lines))
+           :singers (if (and (pos? n) (<= n 8) (not (lv :tilt)) (not= goal :lines) (not= goal :glass))
                       (let [pred (case goal :build #(= % w/GHOST) w/breakable?)]
                         (mapv w/tile-center (w/indices-where pred)))
                       []))))
@@ -509,6 +517,7 @@
   (let [l (lvl) starts (:starts @S)]
     (swap! S assoc :balls
            (cond
+             (:glass l) (do (glass/respawn!) [])        ; the Glass House keeps its own Spark
              (:tilt l) (mapv (fn [[x y]] (new-ball x y 0.0 0.0 :marble)) starts)
              (:ward l) (mapv (fn [[x y]] (let [a (rnd 0 TAU) sp (:speed l)]
                                            (new-ball x y (* sp (math/cos a)) (* sp (math/sin a)) :spark)))
@@ -540,6 +549,7 @@
     (gfx/rebuild-cache! @scr w/sample)
     (t3/set-mode! (:t3d-mode @opts))
     (if (view3d?) (t3/enable! @scr (lv :hmap)) (t3/disable! @scr))
+    (if (:glass l) (glass/enable! @scr l (theme) (+ 11 (max li 0))) (glass/disable! @scr))
     (spawn-balls!)
     (when (:ward l) (choose-ward!))
     (recount-goal!)
@@ -1603,7 +1613,43 @@
                         fs)))
   (swap! S update :banner-t - dt))
 
+(defn glass-event! [[kind & args]]
+  (case kind
+    :brick (let [[pts] args] (add-score! pts))
+    :set (let [[nm pts x y z c] args [sx sy] (glass/point-screen @scr x y z)]
+           (add-score! pts)
+           (swap! S update :sets inc)
+           (swap! S update :floats conj {:x sx :y sy :s (str "SET " nm " +" pts) :c (gfx/mix c 0xffffff 0.4)
+                                         :life 1.1 :max 1.1}))
+    :lost (life-lost!)
+    nil))
+
+(defn update-glass! [dt]
+  (swap! S update :time + dt)
+  (let [sc @scr
+        auto? (or (:autoplay @opts) (title-li? (:li @S)))
+        mx @in/mouse-x my @in/mouse-y
+        ax (in/axis [:left :a :h] [:right :d :l])
+        ay (in/axis [:down :s :j] [:up :w :k])]
+    (when (or (not= 0 ax) (not= 0 ay)) (reset! in/mouse-moved false))
+    (glass/steer! dt ax ay
+                  (cond auto? (glass/autopilot)
+                        (and @in/mouse-moved mx my)
+                        (glass/unproject-near (+ (- mx (:ox sc)) 0.5) (+ (* 2.0 (- my (:oy sc))) 1.0))
+                        :else nil)))
+  (when (and (:autoplay @opts) (glass/stuck?) (> (:time @S) 0.8)) (glass/launch!))
+  (glass/update! dt)
+  (doseq [e (glass/drain-events!)] (glass-event! e))
+  (recount-goal!)
+  (when (and (= :play (:mode @S)) (zero? (:goal-left @S)))
+    (level-won!)))
+
+(declare update-play-2d!)
+
 (defn update-play! [dt]
+  (if (lv :glass) (update-glass! dt) (update-play-2d! dt)))
+
+(defn update-play-2d! [dt]
   (swap! S update :time + dt)
   (update-rotation! dt)
   (if (lv :tilt) (update-tilt! dt) (update-paddle! dt))
@@ -1690,6 +1736,8 @@
   (let [sc @scr st @S t (:time st) t3? @t3/on?]
     ;; the 3D table re-renders its board when the tilt moves
     (when t3? (let [[tx ty] (:tilt st)] (t3/frame! sc tx ty)))
+    ;; the Glass House draws its scene, Spark and trowel itself
+    (when (glass?) (glass/frame! sc) (glass/draw! sc t))
     ;; balls: trail then core
     (doseq [b (if t3? nil (:balls st))]
       (let [c (get mat-color (:mat b) 0xffd27a)
@@ -1756,7 +1804,9 @@
     (when (and (:banner st) (pos? (:banner-t st)))
       (let [s (str " " (:banner st) " ")]
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (quot (:rows sc) 2) s (:banner-c st))))
-    (when (and (paddle-level?) (some :stuck (:balls st)) (not (title-li? (:li st))) (= :play (:mode st)))
+    (when (and (or (paddle-level?) (glass?))
+               (if (glass?) (glass/stuck?) (some :stuck (:balls st)))
+               (not (title-li? (:li st))) (= :play (:mode st)))
       (let [s "SPACE · launch"]
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (- (:rows sc) 5) s 0xa0a8c0)))
     (meta-overlay! sc st)
@@ -1784,6 +1834,7 @@
 (defn controls []
   (cond
     (title-li? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
+    (lv :glass) ["←↑→↓/mouse  trowel" "SPACE  launch" "P pause  Q menu"]
     (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" "P pause  Q menu"]
     (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
     (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
@@ -1811,7 +1862,7 @@
         title? (title-li? (:li st))
         r (fn [i] (+ top i))
         goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
-                    :core "core hits" :lines "lines to go" :orrery "to go" "")
+                    :core "core hits" :lines "lines to go" :orrery "to go" :glass "bricks left" "")
         [fps cells bytes] @fps-stat]
     (panel-line! sb (r 0) "T E S S E R A E" acc)
     (panel-line! sb (r 1) "──────────────────────" 0x404660)
@@ -2012,6 +2063,7 @@
                         (gfx/set-angle! @scr (:theta st))
                         (gfx/rebuild-cache! @scr w/sample)
                         (when (view3d?) (t3/enable! @scr (lv :hmap)))
+                        (glass/resize! @scr)
                         (clear-screen!)
                         (when (= mode :card) (swap! S assoc :card-fresh true)))
       (= mode :card) (when (and (contains? #{:space :enter :click} k) (= ev :press))
@@ -2039,7 +2091,8 @@
         (= k (keyword "]")) (level-won!)
         (= k (keyword "[")) (life-lost!)                ; debug: lose a spark
         (contains? #{:space :click} k)
-        (cond (some :stuck (:balls st)) (launch!)
+        (cond (lv :glass) (glass/launch!)
+              (some :stuck (:balls st)) (launch!)
               (lv :orrery) (when (= ev :press) (orrery-release!))
               (lv :tilt) (swap! S assoc :tilt [0.0 0.0])
               (and (lv :magnet) (zero? (:mag-cd st))) (swap! S assoc :mag-t 1.4 :mag-cd 3.5)

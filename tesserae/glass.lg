@@ -1,0 +1,1167 @@
+(ns tesserae.glass
+  "Glass House (spike): breakout inside a glass cube.
+
+   World. The box is 0..B on every axis: x right, y up, z away from the
+   viewer. Bricks are voxels on an NV^3 grid (one unit each), packed as
+   tetracubes in the back layers. The trowel is a square on the near face
+   (z = 0) that moves in x and y; the Spark bounces off the glass walls and
+   the back, and is lost if it passes the near face beside the trowel.
+
+   Camera. A perspective camera outside the box, in front, a little right
+   and above, so the cube reads as a cube: the far faces (back, floor, left
+   wall) are seen from inside, the near faces (front, top, right) are panes
+   you look through. The eye can follow the trowel a little (parallax),
+   quantized to DETENT steps so the static image re-renders in whole frames.
+
+   Rendering is forward projection, not per-pixel raycasting: the scene is a
+   few hundred quads. Each quad is scan-converted with 1/z, s/z and t/z
+   interpolated affinely in screen space (exact for a plane), so faces get
+   perspective-correct coordinates for grid lines and outlines, and a depth
+   buffer (1/z, larger is nearer) resolves bricks against walls.
+
+     static (on a pose change or a broken brick, clipped to what changed):
+       background, far walls (tint + grid, depth), bricks (lit, outlined
+       per piece, fogged, depth), near panes (fresnel tint + sheen, no
+       depth), box edges (AA lines, depth tested)
+       -> posterized into (:b3 scr), changed cells marked
+     dynamic (every frame, through the light buffer and ovr):
+       floor shadow, depth ring on the four walls at the Spark's depth,
+       the Spark (lit sphere, depth tested), trail, ripples where the Spark
+       hits the glass, shards, the trowel and the Spark's mark on it."
+  (:require [tesserae.gfx :as gfx]))
+
+;; ---------------------------------------------------------------------------
+;; tuning
+
+(def B 8.0)            ; box size, world units
+(def NV 8)             ; voxels per axis
+(def NV3 (* 8 8 8))
+(def BR 0.36)          ; Spark radius
+(def TW 2.5)           ; trowel side
+(def SPEED0 6.2)       ; Spark speed at launch, units/s
+(def SPEED-MAX 9.0)
+(def DT (/ 1.0 240.0)) ; physics step
+(def LOST-Z -2.5)      ; past the near face this far, the Spark is gone
+(def SING-N 12)        ; this many bricks left or fewer: they sing (glow, call the Spark)
+(def SING-PULL 9.0)    ; their pull on the Spark, units/s^2 (speed stays the same: it curves)
+
+(def YAW0 0.26)        ; eye: right of centre (rad)
+(def PITCH0 0.24)      ; eye: above centre (rad)
+(def DIST 26.0)        ; eye distance from the target
+(def TGT-Y 3.7)        ; look-at height (the box centre is 4)
+(def PAR-YAW 0.07)     ; parallax: yaw per unit of trowel offset / (B/2)
+(def PAR-PITCH 0.05)
+(def DETENT 0.012)     ; parallax step, rad
+(def FITF 0.94)        ; the box's projected extent / arena side
+
+(def TINT 0x9fd8ff)    ; glass
+(def EDGE 0xd8f0ff)    ; glass edges
+(def RING 0xffc35a)    ; depth ring (the Spark's gold)
+(def TROWEL 0xcfe9ff)
+
+;; light direction (toward the light): up, left, toward the viewer
+(def ^:private LX -0.45) (def ^:private LY 0.80) (def ^:private LZ -0.40)
+
+;; tetracubes: the five planar tetrominoes (L and J are one piece in 3D)
+;; and the three chiral/branch pieces
+(def shapes
+  [[\I [[0 0 0] [1 0 0] [2 0 0] [3 0 0]]]
+   [\O [[0 0 0] [1 0 0] [0 1 0] [1 1 0]]]
+   [\T [[0 0 0] [1 0 0] [2 0 0] [1 1 0]]]
+   [\L [[0 0 0] [1 0 0] [2 0 0] [0 1 0]]]
+   [\S [[0 0 0] [1 0 0] [1 1 0] [2 1 0]]]
+   [\J [[0 0 0] [1 0 0] [0 1 0] [0 0 1]]]     ; the branch (tripod)
+   [\Z [[0 0 0] [1 0 0] [1 1 0] [1 1 1]]]     ; right screw
+   [\V [[1 0 0] [0 0 0] [0 1 0] [0 1 1]]]])   ; left screw
+
+(def piece-colors
+  {\I 0x3fd0e0 \O 0xf2d14b \T 0xb05ce0 \S 0x5ad35a
+   \Z 0xe8534a \J 0x4a6ef0 \L 0xf09a3a \V 0xff6fb0})
+
+(def piece-names
+  {\I "I" \O "O" \T "T" \L "L" \S "S" \J "TRIPOD" \Z "SCREW" \V "SCREW"})
+
+;; ---------------------------------------------------------------------------
+;; orientations: the 24 rotations of the cube, applied and normalized
+
+(defn- rot-x [[x y z]] [x (- z) y])
+(defn- rot-y [[x y z]] [z y (- x)])
+(defn- rot-z [[x y z]] [(- y) x z])
+
+(defn- normalize [cells]
+  (let [mx (apply min (map #(nth % 0) cells))
+        my (apply min (map #(nth % 1) cells))
+        mz (apply min (map #(nth % 2) cells))]
+    (vec (sort (map (fn [[x y z]] [(- x mx) (- y my) (- z mz)]) cells)))))
+
+(defn- orientations [cells]
+  (let [faces (fn [cs] [cs (mapv rot-y cs) (mapv (comp rot-y rot-y) cs) (mapv (comp rot-y rot-y rot-y) cs)
+                        (mapv rot-x cs) (mapv (comp rot-x rot-x rot-x) cs)])
+        spins (fn [cs] [cs (mapv rot-z cs) (mapv (comp rot-z rot-z) cs) (mapv (comp rot-z rot-z rot-z) cs)])]
+    (vec (distinct (map normalize (mapcat spins (faces cells)))))))
+
+(def shape-orients (mapv (fn [[letter cells]] [letter (orientations cells)]) shapes))
+
+;; ---------------------------------------------------------------------------
+;; state
+
+(def vox (int-array NV3))      ; piece id per voxel, 0 = empty
+(def vcol (int-array NV3))     ; colour per voxel
+(def pieces (atom {}))         ; id -> {:letter :n cells-left}
+(def on? (atom false))
+(def G (atom {}))              ; ball, trowel, fx, events
+(def ^:private rs (atom 1))    ; xorshift32
+
+(defn- rnd-int [n]
+  (let [x @rs
+        x (bit-and (bit-xor x (bit-shift-left x 13)) 0xffffffff)
+        x (bit-xor x (bit-shift-right x 17))
+        x (bit-and (bit-xor x (bit-shift-left x 5)) 0xffffffff)]
+    (reset! rs x)
+    (mod x n)))
+
+(defn vidx ^long [^long x ^long y ^long z] (+ x (* NV (+ y (* NV z)))))
+
+(defn filled? [x y z]
+  (and (>= x 0) (< x NV) (>= y 0) (< y NV) (>= z 0) (< z NV)
+       (not (= 0 (aget vox (vidx x y z))))))
+
+(defn bricks-left [] (loop [i 0 n 0] (if (< i NV3) (recur (inc i) (if (= 0 (aget vox i)) n (inc n))) n)))
+
+(defn- pack!
+  "Drop up to `tries` random tetracubes into the box region
+   [x0,x1) x [y0,y1) x [z0,z1), where they fit."
+  [tries x0 x1 y0 y1 z0 z1 next-id]
+  (loop [t 0 id next-id]
+    (if (>= t tries)
+      id
+      (let [[letter os] (nth shape-orients (rnd-int (count shape-orients)))
+            cells (nth os (rnd-int (count os)))
+            bx (+ x0 (rnd-int (- x1 x0))) by (+ y0 (rnd-int (- y1 y0))) bz (+ z0 (rnd-int (- z1 z0)))
+            placed (mapv (fn [[x y z]] [(+ bx x) (+ by y) (+ bz z)]) cells)
+            ok? (every? (fn [[x y z]] (and (>= x x0) (< x x1) (>= y y0) (< y y1) (>= z z0) (< z z1)
+                                           (not (filled? x y z))))
+                        placed)]
+        (if ok?
+          (let [c (piece-colors letter)]
+            (doseq [[x y z] placed]
+              (let [i (vidx x y z)] (aset vox i id) (aset vcol i c)))
+            (swap! pieces assoc id {:letter letter :n 4})
+            (recur (inc t) (inc id)))
+          (recur (inc t) id))))))
+
+(defn build!
+  "Fill the box from a level's :glass spec: a list of [tries [x0 x1 y0 y1 z0 z1]]
+   packing passes, seeded."
+  [spec seed]
+  (dotimes [i NV3] (aset vox i 0) (aset vcol i 0))
+  (reset! pieces {})
+  (reset! rs (bit-or (bit-and (* 2654435761 (inc seed)) 0xffffffff) 1))
+  (reduce (fn [id [tries [x0 x1 y0 y1 z0 z1]]] (pack! tries x0 x1 y0 y1 z0 z1 id))
+          1 (:packs spec)))
+
+;; ---------------------------------------------------------------------------
+;; camera
+;;
+;; C: 0-2 eye E, 3-5 right r, 6-8 up u, 9-11 forward f, 12 focal F (px),
+;;    13-14 screen centre (px), 15 yaw, 16 pitch, 17-19 light (unit)
+
+(def C (double-array 24))
+
+(defn- basis! [^double yaw ^double pitch]
+  (let [cp (math/cos pitch)
+        ex (+ 4.0 (* DIST (math/sin yaw) cp))
+        ey (+ TGT-Y (* DIST (math/sin pitch)))
+        ez (- 4.0 (* DIST (math/cos yaw) cp))
+        fx (- 4.0 ex) fy (- TGT-Y ey) fz (- 4.0 ez)
+        fl (math/sqrt (+ (* fx fx) (* fy fy) (* fz fz)))
+        fx (/ fx fl) fy (/ fy fl) fz (/ fz fl)
+        ;; r = up x f, u = f x r
+        rx fz ry 0.0 rz (- fx)
+        rl (math/sqrt (+ (* rx rx) (* rz rz)))
+        rx (/ rx rl) rz (/ rz rl)
+        ux (- (* fy rz) (* fz ry)) uy (- (* fz rx) (* fx rz)) uz (- (* fx ry) (* fy rx))]
+    (aset C 0 ex) (aset C 1 ey) (aset C 2 ez)
+    (aset C 3 rx) (aset C 4 ry) (aset C 5 rz)
+    (aset C 6 ux) (aset C 7 uy) (aset C 8 uz)
+    (aset C 9 fx) (aset C 10 fy) (aset C 11 fz)
+    (aset C 15 yaw) (aset C 16 pitch)))
+
+(defn proj
+  "World point -> [u v iz]: screen pixel and 1/depth."
+  [^double x ^double y ^double z]
+  (let [dx (- x (aget C 0)) dy (- y (aget C 1)) dz (- z (aget C 2))
+        xc (+ (* dx (aget C 3)) (* dy (aget C 4)) (* dz (aget C 5)))
+        yc (+ (* dx (aget C 6)) (* dy (aget C 7)) (* dz (aget C 8)))
+        zc (+ (* dx (aget C 9)) (* dy (aget C 10)) (* dz (aget C 11)))
+        iz (/ 1.0 (max zc 0.05))
+        F (aget C 12)]
+    [(+ (aget C 13) (* F xc iz)) (- (aget C 14) (* F yc iz)) iz]))
+
+(defn- fit!
+  "Pick F and the screen centre so the box at the rest pose fills FITF of
+   the arena."
+  [S]
+  (basis! YAW0 PITCH0)
+  (aset C 12 1.0) (aset C 13 0.0) (aset C 14 0.0)
+  (let [ps (for [x [0.0 B] y [0.0 B] z [0.0 B]] (proj x y z))
+        us (map first ps) vs (map second ps)
+        u0 (apply min us) u1 (apply max us) v0 (apply min vs) v1 (apply max vs)
+        F (/ (* FITF S) (max (- u1 u0) (- v1 v0)))]
+    (aset C 12 F)
+    (aset C 13 (- (* 0.5 S) (* F 0.5 (+ u0 u1))))
+    (aset C 14 (- (* 0.5 S) (* F 0.5 (+ v0 v1))))))
+
+(defn unproject-near
+  "Screen pixel -> the point (x, y) on the near face z = 0 under it."
+  [^double u ^double v]
+  (let [F (aget C 12)
+        a (/ (- u (aget C 13)) F) b (/ (- (aget C 14) v) F)
+        dx (+ (* a (aget C 3)) (* b (aget C 6)) (aget C 9))
+        dy (+ (* a (aget C 4)) (* b (aget C 7)) (aget C 10))
+        dz (+ (* a (aget C 5)) (* b (aget C 8)) (aget C 11))
+        t (/ (- (aget C 2)) dz)]
+    [(+ (aget C 0) (* t dx)) (+ (aget C 1) (* t dy))]))
+
+;; The projected lattice: every integer point of the box (0..8 on each
+;; axis), projected once per pose. Bricks and box faces have integer corners,
+;; so their quads read corners from here instead of projecting.
+
+(def NL 9)
+(def LP (double-array (* 3 NL NL NL)))   ; u v iz per lattice point
+
+(defn lidx ^long [^long x ^long y ^long z] (+ x (* NL (+ y (* NL z)))))
+
+(defn- lattice! []
+  (dotimes [i (* NL NL NL)]
+    (let [x (mod i NL) y (mod (quot i NL) NL) z (quot i (* NL NL))
+          [u v iz] (proj x y z)]
+      (aset LP (* 3 i) u) (aset LP (+ 1 (* 3 i)) v) (aset LP (+ 2 (* 3 i)) iz))))
+
+;; ---------------------------------------------------------------------------
+;; buffers
+
+(def ^:private buf (atom nil))   ; {:S :r :g :b :z :bgr :bgg :bgb}
+
+(defn- buffers [S]
+  (let [b @buf]
+    (if (and b (= S (:S b)))
+      b
+      (let [n (* S S)]
+        ;; r g b z: the composed scene (z is the depth buffer the sprites
+        ;; test against); br bg bb bz: the base layer (background, far walls,
+        ;; far edges); or og ob: the additive glass layer (panes, near edges)
+        (reset! buf {:S S :r (double-array n) :g (double-array n) :b (double-array n)
+                     :z (double-array n)
+                     :br (double-array n) :bg (double-array n) :bb (double-array n) :bz (double-array n)
+                     :or (double-array n) :og (double-array n) :ob (double-array n)
+                     :bgr (double-array S) :bgg (double-array S) :bgb (double-array S)})))))
+
+;; clip rect for the static render, px: x0 y0 x1 y1 (inclusive-exclusive)
+(def ^:private CL (long-array 4))
+(def ^:private SP (double-array 2))   ; raster! scanline span scratch
+
+;; ---------------------------------------------------------------------------
+;; quads
+;;
+;; Q: 0-11 (u v iz) for the corners P0 P1 P2 P3, where P1 = P0 + ls b,
+;;    P2 = P0 + ls b + lt c, P3 = P0 + lt c; 12-14 P0; 15-17 b; 18-20 c
+;;    (unit axes); 21 ls; 22 lt; 23-25 colour (0..255 doubles); 26 light;
+;;    27 outline flags (1 s=0, 2 s=ls, 4 t=0, 8 t=lt); 28-30 normal;
+;;    31 fog colour mix; 32 intensity
+
+(def ^:private Q (double-array 40))
+
+(def MAT-BRICK 0)
+(def MAT-WALL 1)
+(def MAT-FLOOR 2)
+(def MAT-PANE 3)
+(def MAT-TROWEL 4)
+
+(defn- set-quad!
+  "Corner geometry of a quad from P0, axis b (0..2) length ls, axis c length lt."
+  [^double ox ^double oy ^double oz ^long ab ^double ls ^long ac ^double lt]
+  (let [bx (if (= ab 0) 1.0 0.0) by (if (= ab 1) 1.0 0.0) bz (if (= ab 2) 1.0 0.0)
+        cx (if (= ac 0) 1.0 0.0) cy (if (= ac 1) 1.0 0.0) cz (if (= ac 2) 1.0 0.0)
+        put (fn [j x y z] (let [[u v iz] (proj x y z)]
+                            (aset Q (* 3 j) u) (aset Q (+ 1 (* 3 j)) v) (aset Q (+ 2 (* 3 j)) iz)))]
+    (put 0 ox oy oz)
+    (put 1 (+ ox (* ls bx)) (+ oy (* ls by)) (+ oz (* ls bz)))
+    (put 2 (+ ox (* ls bx) (* lt cx)) (+ oy (* ls by) (* lt cy)) (+ oz (* ls bz) (* lt cz)))
+    (put 3 (+ ox (* lt cx)) (+ oy (* lt cy)) (+ oz (* lt cz)))
+    (aset Q 12 ox) (aset Q 13 oy) (aset Q 14 oz)
+    (aset Q 15 bx) (aset Q 16 by) (aset Q 17 bz)
+    (aset Q 18 cx) (aset Q 19 cy) (aset Q 20 cz)
+    (aset Q 21 ls) (aset Q 22 lt)))
+
+(defn- axis-step ^long [^long a] (if (= a 0) 1 (if (= a 1) NL (* NL NL))))
+
+(defn- set-quad-l!
+  "set-quad! for a quad with integer corners, from the projected lattice."
+  [^long ox ^long oy ^long oz ^long ab ^long ls ^long ac ^long lt]
+  (let [i0 (lidx ox oy oz) db (* ls (axis-step ab)) dc (* lt (axis-step ac))
+        put (fn [j li] (let [o (* 3 li) q (* 3 j)]
+                         (aset Q q (aget LP o)) (aset Q (+ q 1) (aget LP (+ o 1))) (aset Q (+ q 2) (aget LP (+ o 2)))))]
+    (put 0 i0) (put 1 (+ i0 db)) (put 2 (+ i0 db dc)) (put 3 (+ i0 dc))
+    (aset Q 12 (* 1.0 ox)) (aset Q 13 (* 1.0 oy)) (aset Q 14 (* 1.0 oz))
+    (aset Q 15 (if (= ab 0) 1.0 0.0)) (aset Q 16 (if (= ab 1) 1.0 0.0)) (aset Q 17 (if (= ab 2) 1.0 0.0))
+    (aset Q 18 (if (= ac 0) 1.0 0.0)) (aset Q 19 (if (= ac 1) 1.0 0.0)) (aset Q 20 (if (= ac 2) 1.0 0.0))
+    (aset Q 21 (* 1.0 ls)) (aset Q 22 (* 1.0 lt))))
+
+(defn- set-colour! [c ^double light]
+  (aset Q 23 (* 1.0 (gfx/cr c))) (aset Q 24 (* 1.0 (gfx/cg c))) (aset Q 25 (* 1.0 (gfx/cb c)))
+  (aset Q 26 light))
+
+(defn- max0 ^double [^double x] (if (< x 0.0) 0.0 x))
+(defn- min1 ^double [^double x] (if (> x 1.0) 1.0 x))
+
+(defn- shade!
+  "One pixel i of quad material mat at face coords (s, t) and 1/depth iz,
+   into the colour arrays ar ag ab (additive or replacing per material)."
+  [ar ag ab zb ^long mat ^long i ^double s ^double t ^double iz ^double ls ^double lt]
+  (cond
+    (= mat MAT-BRICK)
+    (when (> iz (aget zb i))
+      (let [fl (long (aget Q 27))
+            ;; outline where the face meets another piece or open space,
+            ;; a faint seam between cubes of one piece
+            ds (min s (- ls s)) dt (min t (- lt t))
+            od (min (if (= 0 (bit-and fl 1)) 9.0 s) (if (= 0 (bit-and fl 2)) 9.0 (- ls s))
+                    (if (= 0 (bit-and fl 4)) 9.0 t) (if (= 0 (bit-and fl 8)) 9.0 (- lt t)))
+            m (cond (< od 0.075) 0.42
+                    (< (min ds dt) 0.03) 0.80
+                    (< od 0.16) 1.18                  ; a bevel just inside the outline
+                    :else 1.0)
+            l (* (aget Q 26) m)
+            fog (aget Q 31)
+            cr (* l (aget Q 23)) cg (* l (aget Q 24)) cb (* l (aget Q 25))
+            nf (- 1.0 fog)]
+        (aset ar i (+ (* nf cr) (* fog (aget ar i))))
+        (aset ag i (+ (* nf cg) (* fog (aget ag i))))
+        (aset ab i (+ (* nf cb) (* fog (aget ab i))))
+        (aset zb i iz)))
+
+    (or (= mat MAT-WALL) (= mat MAT-FLOOR))
+    (let [fs (- s (math/floor s)) ft (- t (math/floor t))
+          gd (min (min fs (- 1.0 fs)) (min ft (- 1.0 ft)))
+          bd (min (min s (- ls s)) (min t (- lt t)))
+          ;; grid lines about a pixel wide whatever the depth (ppu: pixels
+          ;; per unit here), fading out where the cells get too small
+          ppu (* (aget C 12) iz)
+          gl (* (max0 (- 1.0 (* gd ppu 1.1))) (min1 (max0 (/ (- ppu 2.5) 3.0))))
+          a (* (aget Q 32)
+               (+ (if (= mat MAT-FLOOR) 0.30 0.13)
+                  (* 0.20 gl)
+                  (* 0.35 (max0 (- 1.0 (/ bd 0.6))))))]
+      (aset ar i (+ (aget ar i) (* a (aget Q 23))))
+      (aset ag i (+ (aget ag i) (* a (aget Q 24))))
+      (aset ab i (+ (aget ab i) (* a (aget Q 25))))
+      (aset zb i iz))
+
+    (= mat MAT-PANE)
+    (let [px (+ (aget Q 12) (* s (aget Q 15)) (* t (aget Q 18)))
+          py (+ (aget Q 13) (* s (aget Q 16)) (* t (aget Q 19)))
+          pz (+ (aget Q 14) (* s (aget Q 17)) (* t (aget Q 20)))
+          dx (- px (aget C 0)) dy (- py (aget C 1)) dz (- pz (aget C 2))
+          dl (math/sqrt (+ (* dx dx) (* dy dy) (* dz dz)))
+          cs (math/abs (/ (+ (* dx (aget Q 28)) (* dy (aget Q 29)) (* dz (aget Q 30))) dl))
+          q (- 1.0 cs) q2 (* q q)
+          fr (+ 0.03 (* 0.97 q2 q2 q))
+          ;; two diagonal reflections across the pane
+          w (/ (+ s (* 0.55 t)) (* 1.55 ls))
+          sh (+ (* 0.16 (max0 (- 1.0 (/ (math/abs (- w 0.30)) 0.045))))
+                (* 0.10 (max0 (- 1.0 (/ (math/abs (- w 0.37)) 0.015)))))
+          a (* (aget Q 32) (+ 0.04 (* 0.5 fr)))]
+      (aset ar i (+ (aget ar i) (* a (aget Q 23)) (* sh 255.0)))
+      (aset ag i (+ (aget ag i) (* a (aget Q 24)) (* sh 255.0)))
+      (aset ab i (+ (aget ab i) (* a (aget Q 25)) (* sh 255.0))))
+
+    (= mat MAT-TROWEL)
+    (let [bd (min (min s (- ls s)) (min t (- lt t)))
+          a (* (aget Q 32) (cond (< bd 0.10) 0.95 (< bd 0.22) 0.35 :else 0.16))]
+      (aset ar i (+ (aget ar i) (* a (aget Q 23))))
+      (aset ag i (+ (aget ag i) (* a (aget Q 24))))
+      (aset ab i (+ (aget ab i) (* a (aget Q 25)))))
+
+    :else nil))
+
+(defn- span-edge
+  "Fold the crossing of edge (ua va)-(ub vb) with scanline yc into the span
+   lo/hi kept in SP[0..1]."
+  [^double ua ^double va ^double ub ^double vb ^double yc]
+  (when (or (and (<= va yc) (< yc vb)) (and (<= vb yc) (< yc va)))
+    (let [x (+ ua (* (- yc va) (/ (- ub ua) (- vb va))))]
+      (when (< x (aget SP 0)) (aset SP 0 x))
+      (when (> x (aget SP 1)) (aset SP 1 x)))))
+
+(defn- raster!
+  "Scan-convert the quad in Q with material mat into ar ag ab (+ depth zb),
+   clipped to CL. When mark is given, mark the touched cells (dynamic).
+
+   1/z, s/z and t/z are affine in screen space over a plane: each is
+   q = A u + B v + K, solved from the corners P0 (s,t = 0,0), P1 (ls,0)
+   and P2 (ls,lt)."
+  [ar ag ab zb ^long S ^long mat mark rmark ^long cols]
+  (let [u0 (aget Q 0) v0 (aget Q 1) w0 (aget Q 2)
+        u1 (aget Q 3) v1 (aget Q 4) w1 (aget Q 5)
+        u2 (aget Q 6) v2 (aget Q 7) w2 (aget Q 8)
+        u3 (aget Q 9) v3 (aget Q 10)
+        ls (aget Q 21) lt (aget Q 22)
+        du1 (- u1 u0) dv1 (- v1 v0) du2 (- u2 u0) dv2 (- v2 v0)
+        det (- (* du1 dv2) (* du2 dv1))]
+    (when (> (math/abs det) 1e-6)
+      (let [;; iz
+            dq1 (- w1 w0) dq2 (- w2 w0)
+            za (/ (- (* dq1 dv2) (* dq2 dv1)) det) zbb (/ (- (* du1 dq2) (* du2 dq1)) det)
+            zk (- w0 (* za u0) (* zbb v0))
+            ;; s iz: 0, ls w1, ls w2
+            dq1 (* ls w1) dq2 (* ls w2)
+            sa (/ (- (* dq1 dv2) (* dq2 dv1)) det) sb (/ (- (* du1 dq2) (* du2 dq1)) det)
+            sk (- 0.0 (* sa u0) (* sb v0))
+            ;; t iz: 0, 0, lt w2
+            dq2 (* lt w2)
+            ta (/ (- 0.0 (* dq2 dv1)) det) tb (/ (* du1 dq2) det)
+            tk (- 0.0 (* ta u0) (* tb v0))
+            ymin (max (aget CL 1) (long (math/ceil (- (min (min v0 v1) (min v2 v3)) 0.5))))
+            ymax (min (dec (aget CL 3)) (long (math/floor (- (max (max v0 v1) (max v2 v3)) 0.5))))
+            cx0 (aget CL 0) cx1 (dec (aget CL 2))]
+        (loop [y ymin]
+          (when (<= y ymax)
+            (let [yc (+ y 0.5)]
+              ;; the span on this scanline: crossings of the four edges
+              (aset SP 0 1e9) (aset SP 1 -1e9)
+              (span-edge u0 v0 u1 v1 yc) (span-edge u1 v1 u2 v2 yc)
+              (span-edge u2 v2 u3 v3 yc) (span-edge u3 v3 u0 v0 yc)
+              (let [x0 (max cx0 (long (math/ceil (- (aget SP 0) 0.5))))
+                    x1 (min cx1 (long (math/floor (- (aget SP 1) 0.5))))
+                    row (* y S) cy (quot y 2) crow (* cy cols)]
+                (when (<= x0 x1)
+                  (when mark (aset rmark cy 1))
+                  (loop [x x0]
+                    (when (<= x x1)
+                      (let [xc (+ x 0.5)
+                            iz (+ (* za xc) (* zbb yc) zk)
+                            s (/ (+ (* sa xc) (* sb yc) sk) iz)
+                            t (/ (+ (* ta xc) (* tb yc) tk) iz)
+                            s (if (< s 0.0) 0.0 (if (> s ls) ls s))
+                            t (if (< t 0.0) 0.0 (if (> t lt) lt t))]
+                        (shade! ar ag ab zb mat (+ x row) s t iz ls lt)
+                        (when mark (aset mark (+ x crow) 1)))
+                      (recur (inc x)))))))
+            (recur (inc y))))))))
+
+;; ---------------------------------------------------------------------------
+;; lines: anti-aliased, ~1.5 px wide, depth tested (iz along the line)
+
+(defn- line!
+  "Add colour c x inten along the segment between projected points
+   (ua va wa) and (ub vb wb) into ar ag ab; a pixel is lit only where the
+   line is not behind zb by more than a hair. mark: mark cells (dynamic)."
+  [ar ag ab zb ^long S c ^double inten ^double ua ^double va ^double wa ^double ub ^double vb ^double wb
+   mark rmark ^long cols]
+  (let [cr (* inten (gfx/cr c)) cg (* inten (gfx/cg c)) cb (* inten (gfx/cb c))
+        du (- ub ua) dv (- vb va)
+        steep? (> (math/abs dv) (math/abs du))
+        n (long (math/ceil (max (math/abs du) (math/abs dv))))
+        x0 (aget CL 0) y0 (aget CL 1) x1 (aget CL 2) y1 (aget CL 3)]
+    (when (> n 0)
+      (loop [j 0]
+        (when (<= j n)
+          (let [f (/ (* 1.0 j) n)
+                u (+ ua (* f du)) v (+ va (* f dv)) iz (+ wa (* f (- wb wa)))
+                ;; minor axis: three pixels with a tent falloff
+                m (if steep? u v)
+                mi (long (math/floor m))]
+            (loop [d -1]
+              (when (<= d 1)
+                (let [p (+ mi d)
+                      w (max0 (- 1.0 (/ (math/abs (- (+ p 0.5) m)) 1.25)))
+                      x (if steep? p (long (math/floor u)))
+                      y (if steep? (long (math/floor v)) p)]
+                  (when (and (> w 0.0) (>= x x0) (< x x1) (>= y y0) (< y y1))
+                    (let [i (+ x (* y S))]
+                      (when (>= (* iz 1.004) (aget zb i))
+                        (aset ar i (+ (aget ar i) (* w cr)))
+                        (aset ag i (+ (aget ag i) (* w cg)))
+                        (aset ab i (+ (aget ab i) (* w cb)))
+                        (when mark
+                          (let [cy (quot y 2)]
+                            (aset mark (+ x (* cy cols)) 1) (aset rmark cy 1)))))))
+                (recur (inc d)))))
+          (recur (inc j)))))))
+
+(defn- line3!
+  "line! between two world points."
+  [ar ag ab zb S c inten ax ay az bx by bz mark rmark cols]
+  (let [[ua va wa] (proj ax ay az) [ub vb wb] (proj bx by bz)]
+    (line! ar ag ab zb S c inten ua va wa ub vb wb mark rmark cols)))
+
+;; ---------------------------------------------------------------------------
+;; the static render
+
+(defn- face-light ^double [^double nx ^double ny ^double nz]
+  (+ 0.34 (* 0.85 (max0 (+ (* nx (aget C 17)) (* ny (aget C 18)) (* nz (aget C 19)))))))
+
+(defn- eye-out?
+  "Is the eye on the outer side of the plane axis a = p, outward normal sign sg?"
+  [a ^double p sg]
+  (let [e (aget C a)] (if (pos? sg) (> e p) (< e p))))
+
+(defn- box-face!
+  "Box face on axis a at side sd (0: the 0 side, 1: the B side)."
+  [a sd]
+  (let [p (* sd NV)
+        [ab ac] (case a 0 [2 1] 1 [0 2] 2 [0 1])]
+    (set-quad-l! (if (= a 0) p 0) (if (= a 1) p 0) (if (= a 2) p 0) ab NV ac NV)
+    (aset Q 28 (if (= a 0) 1.0 0.0)) (aset Q 29 (if (= a 1) 1.0 0.0)) (aset Q 30 (if (= a 2) 1.0 0.0))))
+
+(defn- fog-at ^double [^double iz]
+  ;; depth in units from the eye: the near face ~DIST - 6, the back ~DIST + 6
+  (let [d (/ 1.0 iz) f (/ (- d (- DIST 4.0)) 10.0)]
+    (* 0.40 (min1 (max0 f)))))
+
+;; The brick faces to draw: every exposed face that looks toward the eye.
+;; Each voxel has six slots (one per direction d: axis d/2, + if d is odd);
+;; FA holds [shown? ox oy oz axis-s axis-t outline-flags colour bx0 by0 bx1
+;; by1] (corner, in-plane axes, screen box), FD [light fog]. A pose change
+;; rebuilds them all, a broken brick only the slots around it.
+
+(def ^:private FS 12)
+(def ^:private FA (long-array (* NV3 6 FS)))
+(def ^:private FD (double-array (* NV3 6 2)))
+
+(defn- vat
+  "Piece id at voxel (x, y, z); 0 outside the box."
+  ^long [^long x ^long y ^long z]
+  (if (and (>= x 0) (< x NV) (>= y 0) (< y NV) (>= z 0) (< z NV)) (aget vox (vidx x y z)) 0))
+
+(defn- face!
+  "Fill voxel (x y z)'s slot for direction d."
+  [^long x ^long y ^long z ^long d]
+  (let [i (vidx x y z) id (aget vox i)
+        f (+ (* 6 i) d) o (* f FS)
+        a (quot d 2) sg (if (odd? d) 1 -1)
+        ex (if (= a 0) sg 0) ey (if (= a 1) sg 0) ez (if (= a 2) sg 0)
+        plane (+ (if (= a 0) x (if (= a 1) y z)) (if (pos? sg) 1 0))]
+    (if (or (= 0 id)
+            (not (= 0 (vat (+ x ex) (+ y ey) (+ z ez))))
+            (not (eye-out? a (* 1.0 plane) sg)))
+      (aset FA o 0)
+      (let [xa (if (= a 0) 2 0) xc (if (= a 1) 2 1)
+            ;; an in-plane neighbour of the same piece whose same face shows
+            ;; continues this face: no outline on that side
+            same? (fn [ax dd]
+                    (let [mx (+ x (if (= ax 0) dd 0)) my (+ y (if (= ax 1) dd 0)) mz (+ z (if (= ax 2) dd 0))]
+                      (and (= id (vat mx my mz)) (= 0 (vat (+ mx ex) (+ my ey) (+ mz ez))))))
+            fl (+ (if (same? xa -1) 0 1) (if (same? xa 1) 0 2) (if (same? xc -1) 0 4) (if (same? xc 1) 0 8))
+            ox (if (= a 0) plane x) oy (if (= a 1) plane y) oz (if (= a 2) plane z)
+            l0 (* 3 (lidx ox oy oz)) l1 (+ l0 (* 3 (axis-step xa))) l3 (+ l0 (* 3 (axis-step xc)))
+            l2 (+ l1 (* 3 (axis-step xc)))
+            u0 (aget LP l0) u1 (aget LP l1) u2 (aget LP l2) u3 (aget LP l3)
+            v0 (aget LP (inc l0)) v1 (aget LP (inc l1)) v2 (aget LP (inc l2)) v3 (aget LP (inc l3))]
+        (aset FA o 1)
+        (aset FA (+ o 1) ox) (aset FA (+ o 2) oy) (aset FA (+ o 3) oz)
+        (aset FA (+ o 4) xa) (aset FA (+ o 5) xc) (aset FA (+ o 6) fl)
+        (aset FA (+ o 7) (aget vcol i))
+        (aset FA (+ o 8) (long (math/floor (min (min u0 u1) (min u2 u3)))))
+        (aset FA (+ o 9) (long (math/floor (min (min v0 v1) (min v2 v3)))))
+        (aset FA (+ o 10) (long (math/ceil (max (max u0 u1) (max u2 u3)))))
+        (aset FA (+ o 11) (long (math/ceil (max (max v0 v1) (max v2 v3)))))
+        (aset FD (* 2 f) (face-light (* 1.0 ex) (* 1.0 ey) (* 1.0 ez)))
+        (aset FD (inc (* 2 f)) (fog-at (* 0.5 (+ (aget LP (+ 2 l0)) (aget LP (+ 2 l2))))))))))
+
+(defn- build-faces! []
+  (dotimes [i NV3]
+    (let [x (mod i NV) y (mod (quot i NV) NV) z (quot i (* NV NV))]
+      (if (= 0 (aget vox i))
+        (dotimes [d 6] (aset FA (* (+ (* 6 i) d) FS) 0))
+        (dotimes [d 6] (face! x y z d))))))
+
+(defn- faces-around!
+  "Refresh the slots of the voxels around (x y z), after it broke."
+  [x y z]
+  (doseq [dz [-1 0 1] dy [-1 0 1] dx [-1 0 1]]
+    (let [vx (+ x dx) vy (+ y dy) vz (+ z dz)]
+      (when (and (>= vx 0) (< vx NV) (>= vy 0) (< vy NV) (>= vz 0) (< vz NV))
+        (dotimes [d 6] (face! vx vy vz d))))))
+
+(defn- brick-faces!
+  "Draw the shown brick faces that touch the clip box, z-buffered."
+  [ar ag ab zb S]
+  (let [cx0 (aget CL 0) cy0 (aget CL 1) cx1 (aget CL 2) cy1 (aget CL 3)]
+    (dotimes [i NV3]
+      (when (not (= 0 (aget vox i)))
+        (dotimes [d 6]
+          (let [f (+ (* 6 i) d) o (* f FS)]
+            (when (and (= 1 (aget FA o))
+                       (not (or (< (aget FA (+ o 10)) cx0) (>= (aget FA (+ o 8)) cx1)
+                                (< (aget FA (+ o 11)) cy0) (>= (aget FA (+ o 9)) cy1))))
+              (set-quad-l! (aget FA (+ o 1)) (aget FA (+ o 2)) (aget FA (+ o 3)) (aget FA (+ o 4)) 1 (aget FA (+ o 5)) 1)
+              (set-colour! (aget FA (+ o 7)) (aget FD (* 2 f)))
+              (aset Q 27 (* 1.0 (aget FA (+ o 6))))
+              (aset Q 31 (aget FD (inc (* 2 f))))
+              (raster! ar ag ab zb S MAT-BRICK nil nil 0))))))))
+
+(def ^:private box-edges
+  ;; [a0 a1 axis] : the edge along axis through the corner with the other
+  ;; two coordinates at sides a0, a1 (in axis order, skipping `axis`)
+  (vec (for [axis [0 1 2] s0 [0 1] s1 [0 1]] [axis s0 s1])))
+
+(defn- edge-near?
+  "Is a box edge on a face seen from outside (a pane)?"
+  [[axis s0 s1]]
+  (let [[a b] (case axis 0 [1 2] 1 [0 2] 2 [0 1])]
+    (or (eye-out? a (* s0 B) (if (= s0 1) 1 -1))
+        (eye-out? b (* s1 B) (if (= s1 1) 1 -1)))))
+
+(defn- edge-pts [[axis s0 s1]]
+  (let [[a b] (case axis 0 [1 2] 1 [0 2] 2 [0 1])
+        p (-> [0.0 0.0 0.0] (assoc a (* s0 B)) (assoc b (* s1 B)))]
+    [p (assoc p axis B)]))
+
+(defn- layers!
+  "Render the pose's base and glass layers over the whole arena."
+  [S]
+  (let [{ar :br ag :bg ab :bb zb :bz qr :or qg :og qb :ob bgr :bgr bgg :bgg bgb :bgb} (buffers S)]
+    (aset CL 0 0) (aset CL 1 0) (aset CL 2 S) (aset CL 3 S)
+    ;; background
+    (dotimes [y S]
+      (let [r (aget bgr y) g (aget bgg y) b (aget bgb y) row (* y S)]
+        (dotimes [x S]
+          (let [i (+ x row)]
+            (aset ar i r) (aset ag i g) (aset ab i b) (aset zb i 0.0)
+            (aset qr i 0.0) (aset qg i 0.0) (aset qb i 0.0)))))
+    ;; far faces (seen from inside): tinted glass with a grid, the floor frosted
+    (doseq [a [0 1 2] sd [0 1]]
+      (when-not (eye-out? a (* sd B) (if (= sd 1) 1 -1))
+        (box-face! a sd)
+        (set-colour! TINT 1.0)
+        (aset Q 32 1.0)
+        (raster! ar ag ab zb S (if (and (= a 1) (= sd 0)) MAT-FLOOR MAT-WALL) nil nil 0)))
+    ;; the far edges (bricks will cover them where they stand in front)
+    (doseq [e box-edges]
+      (when-not (edge-near? e)
+        (let [[[ax ay az] [bx by bz]] (edge-pts e)]
+          (line3! ar ag ab zb S EDGE 0.40 ax ay az bx by bz nil nil 0))))
+    ;; near faces: panes, then their edges, in front of everything
+    (doseq [a [0 1 2] sd [0 1]]
+      (when (eye-out? a (* sd B) (if (= sd 1) 1 -1))
+        (box-face! a sd)
+        (set-colour! TINT 1.0)
+        (aset Q 32 1.0)
+        (raster! qr qg qb zb S MAT-PANE nil nil 0)))
+    (doseq [e box-edges]
+      (when (edge-near? e)
+        (let [[[ax ay az] [bx by bz]] (edge-pts e)
+              [ua va _] (proj ax ay az) [ub vb _] (proj bx by bz)]
+          (line! qr qg qb zb S EDGE 0.95 ua va 1e9 ub vb 1e9 nil nil 0))))))
+
+(defn render!
+  "Compose the static scene into (:b3 scr) over the clip box [x0,x1) x
+   [y0,y1) (pixels): the base layer, the bricks, the glass layer added on
+   top, posterized; marks the cells that changed. Without a box, re-render
+   the layers for the current pose first. Leaves the depth buffer for the
+   sprites."
+  ([scr] (layers! (:S scr)) (render! scr 0 0 (:S scr) (:S scr)))
+  ([scr x0 y0 x1 y1]
+   (let [S (:S scr) cols (:cols scr)
+         {ar :r ag :g ab :b zb :z br :br bg :bg bb :bb bz :bz qr :or qg :og qb :ob} (buffers S)
+         b3 (:b3 scr) mark (:mark scr) rmark (:rmark scr)
+         x0 (max 0 x0) y0 (max 0 y0) x1 (min S x1) y1 (min S y1)]
+     (aset CL 0 x0) (aset CL 1 y0) (aset CL 2 x1) (aset CL 3 y1)
+     (loop [y y0]
+       (when (< y y1)
+         (let [row (* y S)]
+           (loop [x x0]
+             (when (< x x1)
+               (let [i (+ x row)]
+                 (aset ar i (aget br i)) (aset ag i (aget bg i)) (aset ab i (aget bb i)) (aset zb i (aget bz i)))
+               (recur (inc x)))))
+         (recur (inc y))))
+     (brick-faces! ar ag ab zb S)
+     ;; add the glass, posterize into b3, mark what changed
+     (loop [y y0]
+       (when (< y y1)
+         (let [row (* y S) cy (quot y 2) crow (* cy cols)]
+           (loop [x x0]
+             (when (< x x1)
+               (let [i (+ x row)
+                     c (gfx/post (+ (aget ar i) (aget qr i)) (+ (aget ag i) (aget qg i)) (+ (aget ab i) (aget qb i)))]
+                 (when (not (= c (aget b3 i)))
+                   (aset b3 i c)
+                   (aset mark (+ x crow) 1)
+                   (aset rmark cy 1)))
+               (recur (inc x)))))
+         (recur (inc y))))
+     nil)))
+
+(defn voxel-rect
+  "Screen box [x0 y0 x1 y1] (px) covering voxel (x, y, z), padded."
+  [x y z]
+  (let [ls (for [dx [0 1] dy [0 1] dz [0 1]] (* 3 (lidx (+ x dx) (+ y dy) (+ z dz))))
+        us (map #(aget LP %) ls) vs (map #(aget LP (inc %)) ls)]
+    [(- (long (apply min us)) 3) (- (long (apply min vs)) 3)
+     (+ (long (apply max us)) 4) (+ (long (apply max vs)) 4)]))
+
+;; ---------------------------------------------------------------------------
+;; pose
+
+(def ^:private pose (double-array 2))   ; yaw, pitch the image was rendered at
+(def ^:private dirty (atom []))         ; clip rects owed a re-render; :all for everything
+
+(defn- set-pose! [scr ^double yaw ^double pitch]
+  (basis! yaw pitch)
+  (let [[lx ly lz] (let [l (math/sqrt (+ (* LX LX) (* LY LY) (* LZ LZ)))] [(/ LX l) (/ LY l) (/ LZ l)])]
+    (aset C 17 lx) (aset C 18 ly) (aset C 19 lz))
+  (lattice!)
+  (build-faces!)
+  (aset pose 0 yaw) (aset pose 1 pitch))
+
+(defn- bg! [scr theme]
+  (let [S (:S scr) {bgr :bgr bgg :bgg bgb :bgb} (buffers S)
+        c0 (or (:bg0 theme) 0x0a0f1c) c1 (or (:bg1 theme) 0x141a2e)]
+    (dotimes [y S]
+      (let [f (/ (* 1.0 y) S) c (gfx/mix c1 c0 f)]
+        (aset bgr y (* 1.0 (gfx/cr c))) (aset bgg y (* 1.0 (gfx/cg c))) (aset bgb y (* 1.0 (gfx/cb c)))))))
+
+;; ---------------------------------------------------------------------------
+;; game API
+
+(declare singers)
+
+(defn new-ball [tx ty]
+  {:x tx :y ty :z (+ BR 0.02) :vx 0.0 :vy 0.0 :vz 0.0 :stuck true :sp SPEED0 :trail []})
+
+(defn enable!
+  "Glass House on for a freshly loaded level l (its :glass spec), on scr."
+  [scr l theme seed]
+  (reset! on? true)
+  (build! (:glass l) seed)
+  (reset! G {:tx 4.0 :ty 4.0 :tvx 0.0 :tvy 0.0 :ball (new-ball 4.0 4.0)
+             :ripples [] :shards [] :events [] :combo 0 :flash 0.0 :theme theme
+             :parallax (get-in l [:glass :parallax] :auto) :slow 0})
+  (swap! G assoc :singers (singers))
+  (fit! (:S scr))
+  (bg! scr theme)
+  (set-pose! scr YAW0 PITCH0)
+  (aset (:xf scr) 3 2.0)      ; compose! reads b3; sprites stay in screen units
+  (reset! dirty [:all]))
+
+(defn resize! [scr]
+  (when @on?
+    (fit! (:S scr))
+    (bg! scr (:theme @G))
+    (set-pose! scr YAW0 PITCH0)
+    (aset (:xf scr) 3 2.0)
+    (reset! dirty [:all])))
+
+(defn disable! [scr]
+  (when @on?
+    (reset! on? false)
+    (aset (:xf scr) 3 0.0)))
+
+(defn goal-left [] (bricks-left))
+
+(defn- singers
+  "Centres of the last few bricks (SING-N or fewer left), else []."
+  []
+  (if (> (bricks-left) SING-N)
+    []
+    (vec (for [i (range NV3) :when (not (= 0 (aget vox i)))]
+           [(+ 0.5 (mod i NV)) (+ 0.5 (mod (quot i NV) NV)) (+ 0.5 (quot i (* NV NV)))]))))
+
+(defn drain-events! [] (let [e (:events @G)] (swap! G assoc :events []) e))
+
+(defn- event! [e] (swap! G update :events conj e))
+
+(defn respawn! [] (swap! G assoc :ball (new-ball (:tx @G) (:ty @G)) :combo 0))
+
+(defn launch! []
+  (let [b (:ball @G)]
+    (when (:stuck b)
+      (let [a (* 2.0 math/PI (/ (rnd-int 1000) 1000.0))
+            sp (:sp b) lat (* 0.18 sp)]
+        (swap! G assoc :ball (assoc b :stuck false
+                                      :vx (* lat (math/cos a)) :vy (* lat (math/sin a))
+                                      :vz (math/sqrt (- (* sp sp) (* lat lat)))))))))
+
+(defn stuck? [] (boolean (:stuck (:ball @G))))
+
+;; --- physics
+
+(defn- ripple! [a sd x y z strength]
+  (swap! G update :ripples conj {:a a :p [x y z] :t 0.0 :s strength}))
+
+(defn- shards! [x y z c]
+  (swap! G update :shards into
+         (for [_ (range 12)]
+           (let [r (fn [] (- (/ (rnd-int 1000) 500.0) 1.0))]
+             {:x x :y y :z z :vx (* 3.0 (r)) :vy (+ 1.0 (* 3.0 (r))) :vz (* 3.0 (r))
+              :c c :life (+ 0.5 (* 0.3 (/ (rnd-int 100) 100.0))) :max 0.8}))))
+
+(defn- hit-voxel! [i]
+  (let [id (aget vox i) c (aget vcol i)
+        x (mod i NV) y (mod (quot i NV) NV) z (quot i (* NV NV))
+        combo (inc (:combo @G))
+        p (get @pieces id)]
+    (aset vox i 0) (aset vcol i 0)
+    (faces-around! x y z)
+    (swap! G assoc :singers (singers))
+    (swap! G assoc :combo combo)
+    (swap! dirty conj (voxel-rect x y z))
+    (shards! (+ x 0.5) (+ y 0.5) (+ z 0.5) c)
+    (event! [:brick (* 10 (min combo 8)) (+ x 0.5) (+ y 0.5) (+ z 0.5)])
+    (let [n (dec (:n p))]
+      (swap! pieces assoc-in [id :n] n)
+      (when (zero? n)
+        (event! [:set (piece-names (:letter p)) 100 (+ x 0.5) (+ y 0.5) (+ z 0.5) c])))))
+
+(defn- sphere-hits
+  "Voxels the sphere at (x y z) overlaps, nearest first: [[i d2] ...]."
+  [^double x ^double y ^double z]
+  (let [lo (fn [v] (max 0 (long (math/floor (- v BR)))))
+        hi (fn [v] (min (dec NV) (long (math/floor (+ v BR)))))]
+    (sort-by second
+             (for [vz (range (lo z) (inc (hi z)))
+                   vy (range (lo y) (inc (hi y)))
+                   vx (range (lo x) (inc (hi x)))
+                   :let [i (vidx vx vy vz)]
+                   :when (not (= 0 (aget vox i)))
+                   :let [cx (max vx (min x (inc vx))) cy (max vy (min y (inc vy))) cz (max vz (min z (inc vz)))
+                         dx (- x cx) dy (- y cy) dz (- z cz)
+                         d2 (+ (* dx dx) (* dy dy) (* dz dz))]
+                   :when (< d2 (* BR BR))]
+               [i d2]))))
+
+(defn- in-trowel? [b]
+  (let [g @G h (+ (* 0.5 TW) (* 0.6 BR))]
+    (and (<= (math/abs (- (:x b) (:tx g))) h) (<= (math/abs (- (:y b) (:ty g))) h))))
+
+(defn- step-axis
+  "Move ball b along axis k (:x :y :z, velocity kv) by h; bounce off the
+   glass and the bricks."
+  [b k kv h]
+  (let [v (get b kv) p (+ (get b k) (* v h))
+        lo BR hi (- B BR)
+        b2 (assoc b k p)]
+    (cond
+      ;; glass walls
+      (and (< p lo) (not= k :z))
+      (do (ripple! k 0 (:x b2) (:y b2) (:z b2) (min 1.0 (/ (math/abs v) 8.0)))
+          (assoc b k lo kv (math/abs v)))
+      (> p hi)
+      (do (ripple! k 1 (:x b2) (:y b2) (:z b2) (min 1.0 (/ (math/abs v) 8.0)))
+          (assoc b k hi kv (- (math/abs v))))
+      ;; the near face: the trowel, or open air
+      (and (= k :z) (< p lo) (neg? v) (>= (get b k) lo) (in-trowel? b2))
+      (let [g @G sp (:sp b) h0 (* 0.5 TW)
+            ox (/ (- (:x b) (:tx g)) (* 0.5 TW)) oy (/ (- (:y b) (:ty g)) (* 0.5 TW))
+            ;; where it lands on the trowel steers it (the breakout rule, in
+            ;; two axes); most of its sideways speed carries through
+            vx (+ (* 0.65 (:vx b)) (* 0.5 sp ox) (* 0.12 (:tvx g)))
+            vy (+ (* 0.65 (:vy b)) (* 0.5 sp oy) (* 0.12 (:tvy g)))
+            lat (math/sqrt (+ (* vx vx) (* vy vy)))
+            ;; never straight back along z: a rally on one line digs one hole
+            lo (* 0.14 sp) cap (* 0.75 sp)
+            [vx vy lat] (if (< lat lo)
+                          (let [a (* 2.0 math/PI (/ (rnd-int 1000) 1000.0))]
+                            [(* lo (math/cos a)) (* lo (math/sin a)) lo])
+                          [vx vy lat])
+            f (if (> lat cap) (/ cap lat) 1.0)
+            vx (* vx f) vy (* vy f)
+            vz (math/sqrt (max 0.0 (- (* sp sp) (* vx vx) (* vy vy))))
+            ;; the bot picks a new spot on the trowel to strike with
+            r (fn [] (* 0.8 h0 (- (/ (rnd-int 1000) 500.0) 1.0)))]
+        (swap! G assoc :combo 0 :flash 1.0 :aim [(r) (r)])
+        (event! [:trowel])
+        (assoc b :z lo :vx vx :vy vy :vz vz))
+      :else
+      (let [hits (when (and (>= p (- BR)) (<= p (+ B BR))) (sphere-hits (:x b2) (:y b2) (:z b2)))]
+        (if (seq hits)
+          (do (hit-voxel! (first (first hits)))
+              (assoc b kv (- v) :sp (min SPEED-MAX (* 1.012 (:sp b)))))
+          b2)))))
+
+(defn- rescale [b]
+  (let [vx (:vx b) vy (:vy b) vz (:vz b)
+        l (math/sqrt (+ (* vx vx) (* vy vy) (* vz vz)))
+        ;; keep some depth speed so a rally never stalls sideways
+        vz (if (< (math/abs vz) (* 0.35 l)) (* (if (neg? vz) -1.0 1.0) 0.35 l) vz)
+        l2 (math/sqrt (+ (* vx vx) (* vy vy) (* vz vz)))
+        f (/ (:sp b) (max l2 1e-6))]
+    (assoc b :vx (* f vx) :vy (* f vy) :vz (* f vz))))
+
+(defn- pull
+  "The singing bricks call the Spark: bend its path toward the nearest one."
+  [b h]
+  (let [ss (:singers @G)]
+    (if (empty? ss)
+      b
+      (let [x (:x b) y (:y b) z (:z b)
+            d2 (fn [[sx sy sz]] (let [dx (- sx x) dy (- sy y) dz (- sz z)] (+ (* dx dx) (* dy dy) (* dz dz))))
+            [sx sy sz :as s] (apply min-key d2 ss)
+            l (max 0.5 (math/sqrt (d2 s)))
+            a (* SING-PULL h (/ 1.0 l))]
+        (assoc b :vx (+ (:vx b) (* a (- sx x))) :vy (+ (:vy b) (* a (- sy y))) :vz (+ (:vz b) (* a (- sz z))))))))
+
+(defn steer!
+  "Move the trowel: axes ax ay in -1..1 (keys), or a target point (mouse/bot)."
+  [dt ax ay target]
+  (let [g @G h (* 0.5 TW)
+        [tx ty tvx tvy]
+        (if target
+          (let [[x y] target
+                nx (+ (:tx g) (* (min 1.0 (* 18.0 dt)) (- x (:tx g))))
+                ny (+ (:ty g) (* (min 1.0 (* 18.0 dt)) (- y (:ty g))))]
+            [nx ny (/ (- nx (:tx g)) dt) (/ (- ny (:ty g)) dt)])
+          (let [acc 60.0 top 9.0
+                tv (fn [v a] (if (zero? a)
+                               (* v (max 0.0 (- 1.0 (* 14.0 dt))))
+                               (max (- top) (min top (+ v (* acc a dt))))))
+                vx (tv (:tvx g) ax) vy (tv (:tvy g) ay)]
+            [(+ (:tx g) (* vx dt)) (+ (:ty g) (* vy dt)) vx vy]))
+        tx (max h (min (- B h) tx)) ty (max h (min (- B h) ty))]
+    (swap! G assoc :tx tx :ty ty :tvx tvx :tvy tvy)))
+
+(defn autopilot
+  "Where the bot wants the trowel: under the Spark's crossing of the near
+   face (walls folded in), or following it while it heads away."
+  []
+  (let [b (:ball @G)]
+    (if (or (:stuck b) (>= (:vz b) 0.0))
+      [(:x b) (:y b)]
+      (let [t (/ (- (:z b) BR) (- (:vz b)))
+            fold (fn [p v]
+                   (let [lo BR span (- B (* 2.0 BR))
+                         q (mod (- (+ p (* v t)) lo) (* 2.0 span))]
+                     (+ lo (if (> q span) (- (* 2.0 span) q) q))))]
+        (let [[ax ay] (or (:aim @G) [0.0 0.0])]
+          [(- (fold (:x b) (:vx b)) ax) (- (fold (:y b) (:vy b)) ay)])))))
+
+(defn update!
+  "Advance the Glass House by dt: the Spark, ripples, shards, the pose.
+   Events for the game collect in (:events @G)."
+  [dt]
+  (let [g @G]
+    ;; the Spark
+    (let [b (:ball g)]
+      (if (:stuck b)
+        (swap! G assoc :ball (assoc b :x (:tx g) :y (:ty g) :z (+ BR 0.02)))
+        (let [n (max 1 (long (math/ceil (/ dt DT)))) h (/ dt n)
+              b (loop [j 0 b b]
+                  (if (or (>= j n) (< (:z b) LOST-Z))
+                    b
+                    (recur (inc j) (-> b (pull h) (step-axis :x :vx h) (step-axis :y :vy h) (step-axis :z :vz h) rescale))))
+              tr (:trail b)
+              b (assoc b :trail (conj (if (>= (count tr) 6) (subvec tr 1) tr) [(:x b) (:y b) (:z b)]))]
+          (if (< (:z b) LOST-Z)
+            (do (swap! G assoc :ball (assoc b :lost true)) (event! [:lost]))
+            (swap! G assoc :ball b)))))
+    ;; effects
+    (swap! G update :ripples (fn [rs] (into [] (comp (map #(update % :t + dt)) (filter #(< (:t %) 0.45))) rs)))
+    (swap! G update :shards
+           (fn [ss] (into [] (comp (map (fn [s] (assoc s :x (+ (:x s) (* dt (:vx s))) :y (+ (:y s) (* dt (:vy s)))
+                                                        :z (+ (:z s) (* dt (:vz s))) :vy (- (:vy s) (* 9.0 dt))
+                                                        :life (- (:life s) dt))))
+                                   (filter #(pos? (:life %))))
+                          ss)))
+    (swap! G update :flash #(max 0.0 (- % (* 3.0 dt))))))
+
+(def PARALLAX-MS 14.0)   ; parallax stays on while a full render costs less
+
+(defn frame!
+  "Before the sprites: bring the static image up to date (pose detent from
+   the trowel, broken bricks). Parallax is :auto by default: it switches
+   itself off for the run if a full render is too slow for it (the VM; the
+   AOT build keeps it). Returns true when it rendered."
+  [scr]
+  (let [g @G
+        par (:parallax g)
+        [yaw pitch] (if par
+                      (let [q (fn [v] (* DETENT (math/round (/ v DETENT))))]
+                        [(q (+ YAW0 (* PAR-YAW (/ (- (:tx g) 4.0) 4.0))))
+                         (q (+ PITCH0 (* PAR-PITCH (/ (- (:ty g) 4.0) 4.0))))])
+                      [YAW0 PITCH0])
+        moved? (or (not (== yaw (aget pose 0))) (not (== pitch (aget pose 1))))
+        d @dirty]
+    (cond
+      (or moved? (some #{:all} d))
+      (let [t0 (System/nanoTime)]
+        (set-pose! scr yaw pitch) (reset! dirty []) (render! scr)
+        (let [ms (/ (- (System/nanoTime) t0) 1e6)]
+          (swap! G assoc :render-ms ms)
+          (when (and (= par :auto) (> ms PARALLAX-MS))
+            (swap! G update :slow inc)
+            ;; two slow renders in a row (not a one-off GC pause): settle
+            (when (>= (:slow @G) 2) (swap! G assoc :parallax false) (reset! dirty [:all]))))
+        true)
+      (seq d)
+      (do (reset! dirty [])
+          (doseq [[x0 y0 x1 y1] d] (render! scr x0 y0 x1 y1))
+          true)
+      :else false)))
+
+;; --- sprites (every frame)
+
+(defn- glow-px!
+  "gfx/glow! at screen pixel (u, v) with radii in px."
+  [scr ^double u ^double v ^double rad ^double core c ^double inten]
+  (let [k (:k scr)]
+    (gfx/glow! scr (/ u k) (/ v k) (/ rad k) (/ core k) c inten)))
+
+(defn- shadow!
+  "The Spark's shadow on the floor, straight below it: a soft ellipse that
+   darkens the floor (not bricks in front of it)."
+  [scr b]
+  (let [S (:S scr) cols (:cols scr) b3 (:b3 scr) zb (:z (buffers S))
+        x (:x b) z (:z b) h (:y b)
+        r (* BR (+ 1.1 (* 0.12 h)))
+        strength (* 0.75 (max 0.25 (- 1.0 (/ h 10.0))))
+        [cu cv ciz] (proj x 0.0 z)
+        [au av _] (proj (+ x r) 0.0 z)
+        [bu bv _] (proj x 0.0 (+ z r))
+        e1u (- au cu) e1v (- av cv) e2u (- bu cu) e2v (- bv cv)
+        det (- (* e1u e2v) (* e2u e1v))]
+    (when (> (math/abs det) 1e-6)
+      (let [ext (+ (max (math/abs e1u) (math/abs e2u)) (max (math/abs e1v) (math/abs e2v)) 1.0)
+            x0 (max 0 (long (- cu ext))) x1 (min (dec S) (long (+ cu ext)))
+            y0 (max 0 (long (- cv ext))) y1 (min (dec S) (long (+ cv ext)))
+            ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr) mark (:mark scr) rmark (:rmark scr)]
+        (loop [y y0]
+          (when (<= y y1)
+            (loop [xx x0]
+              (when (<= xx x1)
+                (let [du (- (+ xx 0.5) cu) dv (- (+ y 0.5) cv)
+                      p (/ (- (* du e2v) (* dv e2u)) det)
+                      q (/ (- (* e1u dv) (* e1v du)) det)
+                      d2 (+ (* p p) (* q q))
+                      i (+ xx (* y S))]
+                  (when (and (< d2 1.0) (<= (aget zb i) (* ciz 1.01)))
+                    (let [c (aget b3 i) f (* strength (- 1.0 (* d2 d2))) cy (quot y 2)]
+                      (aset ar i (- (aget ar i) (* f (gfx/cr c))))
+                      (aset ag i (- (aget ag i) (* f (gfx/cg c))))
+                      (aset ab i (- (aget ab i) (* f (gfx/cb c))))
+                      (aset mark (+ xx (* cy cols)) 1)
+                      (aset rmark cy 1))))
+                (recur (inc xx))))
+            (recur (inc y))))))))
+
+(defn- sphere!
+  "The Spark: a lit sphere at its projected centre, depth tested per pixel,
+   written solid into ovr, with a soft halo."
+  [scr b c]
+  (let [S (:S scr) cols (:cols scr) zb (:z (buffers S)) ovr (:ovr scr)
+        mark (:mark scr) rmark (:rmark scr)
+        [cu cv iz] (proj (:x b) (:y b) (:z b))
+        zc (/ 1.0 iz)
+        rp (* BR (aget C 12) iz)
+        lx (aget C 17) ly (aget C 18)
+        ;; the light in screen space (x right, y down), toward the viewer
+        lsx (+ (* lx (aget C 3)) (* ly (aget C 4)) (* (aget C 19) (aget C 5)))
+        lsy (- (+ (* lx (aget C 6)) (* ly (aget C 7)) (* (aget C 19) (aget C 8))))
+        lsz (- (+ (* lx (aget C 9)) (* ly (aget C 10)) (* (aget C 19) (aget C 11))))
+        cr (* 1.0 (gfx/cr c)) cg (* 1.0 (gfx/cg c)) cb (* 1.0 (gfx/cb c))
+        x0 (max 0 (long (math/floor (- cu rp)))) x1 (min (dec S) (long (math/floor (+ cu rp))))
+        y0 (max 0 (long (math/floor (- cv rp)))) y1 (min (dec S) (long (math/floor (+ cv rp))))]
+    (glow-px! scr cu cv (* 3.2 rp) rp c 0.30)
+    (loop [y y0]
+      (when (<= y y1)
+        (loop [x x0]
+          (when (<= x x1)
+            (let [dx (/ (- (+ x 0.5) cu) rp) dy (/ (- (+ y 0.5) cv) rp)
+                  d2 (+ (* dx dx) (* dy dy))]
+              (when (< d2 1.0)
+                (let [nz (math/sqrt (- 1.0 d2))
+                      i (+ x (* y S))
+                      ;; the sphere's surface here, nearer than its centre
+                      piz (/ 1.0 (- zc (* BR nz)))]
+                  (when (>= (* piz 1.002) (aget zb i))
+                    (let [nd (max0 (+ (* dx lsx) (* dy lsy) (* nz lsz)))
+                          l (+ 0.38 (* 0.8 nd))
+                          sp (let [q (max0 (- nd 0.82))] (* 2600.0 q q))
+                          cy (quot y 2)]
+                      (aset ovr i (gfx/post (+ (* l cr) sp) (+ (* l cg) sp) (+ (* l cb) sp)))
+                      (aset mark (+ x (* cy cols)) 1)
+                      (aset rmark cy 1))))))
+            (recur (inc x))))
+        (recur (inc y))))))
+
+(defn- ring!
+  "The depth ring: the four walls lit where the Spark's depth z meets them."
+  [scr ^double z ^double inten]
+  (let [S (:S scr) {zb :z} (buffers S)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr) cols (:cols scr)]
+    (aset CL 0 0) (aset CL 1 0) (aset CL 2 S) (aset CL 3 S)
+    (doseq [[ax ay bx by] [[0.0 0.0 B 0.0] [B 0.0 B B] [B B 0.0 B] [0.0 B 0.0 0.0]]]
+      (line3! ar ag ab zb S RING inten ax ay z bx by z mark rmark cols))))
+
+(defn- ripples! [scr]
+  (let [S (:S scr) {zb :z} (buffers S)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr) cols (:cols scr)]
+    (doseq [{:keys [a p t s]} (:ripples @G)]
+      (let [rr (+ 0.15 (* 3.2 t)) f (* s (- 1.0 (/ t 0.45)))
+            [ia ib] (case a :x [:y :z] :y [:x :z] :z [:x :y])
+            idx {:x 0 :y 1 :z 2}
+            pt (fn [ang] (let [q (-> p (update (idx ia) + (* rr (math/cos ang)))
+                                     (update (idx ib) + (* rr (math/sin ang))))]
+                           (if (every? #(and (>= % -0.01) (<= % (+ B 0.01))) q) q nil)))
+            n 20]
+        (dotimes [j n]
+          (let [p0 (pt (* j (/ (* 2.0 math/PI) n))) p1 (pt (* (inc j) (/ (* 2.0 math/PI) n)))]
+            (when (and p0 p1)
+              (line3! ar ag ab zb S EDGE (* 0.9 f) (nth p0 0) (nth p0 1) (nth p0 2)
+                      (nth p1 0) (nth p1 1) (nth p1 2) mark rmark cols))))))))
+
+(defn- trowel! [scr]
+  (let [S (:S scr) {zb :z} (buffers S)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr) cols (:cols scr)
+        g @G h (* 0.5 TW) fl (:flash g)]
+    (aset CL 0 0) (aset CL 1 0) (aset CL 2 S) (aset CL 3 S)
+    (set-quad! (- (:tx g) h) (- (:ty g) h) 0.0 0 TW 1 TW)
+    (set-colour! (gfx/mix TROWEL 0xffffff fl) 1.0)
+    (aset Q 32 (+ 1.0 (* 0.6 fl)))
+    (raster! ar ag ab zb S MAT-TROWEL mark rmark cols)))
+
+(defn draw!
+  "Every frame, after frame!: the moving parts, into the light buffer and ovr."
+  [scr t]
+  (let [g @G b (:ball g) c 0xffd27a
+        S (:S scr) {zb :z} (buffers S)
+        ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
+        mark (:mark scr) rmark (:rmark scr) cols (:cols scr)]
+    (when-not (:lost b)
+      (when (>= (:z b) 0.0) (shadow! scr b))
+      (when (and (>= (:z b) 0.0) (not (:stuck b)))
+        (ring! scr (:z b) 0.9))
+      ;; trail
+      (let [tr (:trail b) n (count tr)]
+        (dotimes [j (dec n)]
+          (let [[x y z] (nth tr j) [u v iz] (proj x y z) f (/ (inc j) (* 1.0 n))]
+            (glow-px! scr u v (* 1.6 BR (aget C 12) iz) (* 0.4 BR (aget C 12) iz) c (* 0.22 f)))))
+      (sphere! scr b c)
+      ;; the Spark's mark on the near face, where it would meet the trowel
+      (when (and (not (:stuck b)) (>= (:z b) 0.0))
+        (let [[u v iz] (proj (:x b) (:y b) 0.0)
+              hit? (in-trowel? b)]
+          (glow-px! scr u v (* 0.9 BR (aget C 12) iz) (* 0.25 BR (aget C 12) iz)
+                    (if hit? 0xa0ffc0 0xff9070) 0.55))))
+    ;; the singers pulse
+    (doseq [[x y z] (:singers g)]
+      (let [[u v iz] (proj x y z) F (aget C 12)]
+        (glow-px! scr u v (* 1.6 F iz) 0.0 0xfff0c0 (+ 0.30 (* 0.2 (math/sin (+ (* 5.0 t) x z)))))))
+    (ripples! scr)
+    (doseq [s (:shards g)]
+      (let [[u v iz] (proj (:x s) (:y s) (:z s))]
+        (glow-px! scr u v (* 0.35 (aget C 12) iz) (* 0.1 (aget C 12) iz) (:c s) (/ (:life s) (:max s)))))
+    (trowel! scr)))
+
+(defn ball-screen
+  "Screen units (px / k) of the Spark, for floating text."
+  [scr]
+  (let [b (:ball @G) [u v _] (proj (:x b) (:y b) (:z b)) k (:k scr)] [(/ u k) (/ v k)]))
+
+(defn point-screen [scr x y z]
+  (let [[u v _] (proj x y z) k (:k scr)] [(/ u k) (/ v k)]))

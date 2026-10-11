@@ -374,7 +374,8 @@
    :violet {:bg0 0x1a0b26 :bg1 0x2a1038 :outside 0x0a040e :accent 0xe070ff}
    :crimson {:bg0 0x24080e :bg1 0x380c14 :outside 0x0e0305 :accent 0xff5a6e}
    :grout  {:bg0 0x121014 :bg1 0x1e1a1c :outside 0x060506 :accent 0xff8a3c}
-   :orrery {:bg0 0x0a0f20 :bg1 0x141a2e :outside 0x04050b :accent 0xe8c070}})
+   :orrery {:bg0 0x0a0f20 :bg1 0x141a2e :outside 0x04050b :accent 0xe8c070}
+   :glass  {:bg0 0x04070d :bg1 0x101a2a :outside 0x020308 :accent 0x9fd8ff}})
 
 ;; ---------------------------------------------------------------------------
 ;; chapters & levels
@@ -570,4 +571,20 @@
            ""
            "Light every lamp, the ones in the keep too."]}])
 
-(defn special-level [id] (first (filter #(= id (:id %)) special-levels)))
+;; 8.1 Glass House (spike): breakout inside a glass cube (tesserae.glass).
+;; The 2D map is unused; :glass packs tetracubes into the box, each pass
+;; [tries [x0 x1 y0 y1 z0 z1]] (voxel ranges, z away from the viewer).
+(def map-empty (vec (repeat 24 (apply str (repeat 24 ".")))))
+
+(def special-levels-glass
+  [{:id "8.1" :name "Glass House" :chapter "VIII · THE GLASS" :theme :glass :par 210
+    :map map-empty :goal :glass
+    :glass {:packs [[700 [0 8 0 8 6 8]]       ; the back two layers, packed
+                    [160 [0 8 0 8 4 8]]]}     ; looser in front of them
+    :card ["Above the Mosaic the first masons kept one room of glass, where a tile could be turned in the hand and seen from every side."
+           ""
+           "The Grout got in there too."
+           ""
+           "Reach in. The trowel moves up and down now. Watch the ring on the walls: it shows how deep the Spark is."]}])
+
+(defn special-level [id] (first (filter #(= id (:id %)) (concat special-levels special-levels-glass))))

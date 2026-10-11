@@ -1,0 +1,71 @@
+(ns test.glass-test
+  "Glass House (spike): tetracube packing, the Spark's physics, the camera."
+  (:require [clojure.test :refer [deftest is testing]]
+            [tesserae.gfx :as gfx]
+            [tesserae.glass :as g]
+            [tesserae.levels :as L]))
+
+(def level (L/special-level "8.1"))
+
+(defn- fresh! [seed]
+  (let [scr (gfx/make-screen 120 40 26 true)]
+    (g/enable! scr level (:glass L/themes) seed)
+    scr))
+
+(deftest shapes-are-tetracubes
+  (doseq [[letter os] g/shape-orients]
+    (testing (str letter)
+      (is (<= 1 (count os) 24) "1..24 distinct orientations")
+      (doseq [cells os]
+        (is (= 4 (count (distinct cells))) "four cells")
+        ;; face-connected: every cell touches another
+        (is (every? (fn [a] (some (fn [b] (= 1 (reduce + (map #(math/abs (- %1 %2)) a b)))) cells)) cells))))))
+
+(deftest packing-is-deterministic
+  (fresh! 7)
+  (let [a (vec g/vox)]
+    (fresh! 7)
+    (is (= a (vec g/vox)) "same seed, same bricks")
+    (fresh! 8)
+    (is (not= a (vec g/vox)) "another seed, other bricks"))
+  (is (pos? (g/bricks-left)))
+  (is (zero? (mod (g/bricks-left) 4)) "whole tetracubes")
+  (testing "the front half is open: nothing nearer than z = 4"
+    (is (every? (fn [i] (or (zero? (aget g/vox i)) (>= (quot i 64) 4))) (range 512)))))
+
+(deftest the-spark-bounces-and-breaks
+  (fresh! 1011)
+  (g/launch!)
+  (let [n0 (g/bricks-left)
+        evs (atom [])]
+    (dotimes [_ 600]
+      (g/steer! 0.02 0 0 (g/autopilot))
+      (g/update! 0.02)
+      (swap! evs into (g/drain-events!)))
+    (is (< (g/bricks-left) n0) "twelve seconds of bot play breaks bricks")
+    (is (some #(= :trowel (first %)) @evs) "the trowel returns it")
+    (is (not-any? #(= :lost (first %)) @evs) "the bot does not lose it")
+    (let [b (:ball @g/G)]
+      (is (every? #(<= 0.0 % 8.0) [(:x b) (:y b)]) "inside the glass")
+      (is (< (math/abs (- (math/sqrt (+ (* (:vx b) (:vx b)) (* (:vy b) (:vy b)) (* (:vz b) (:vz b))))
+                          (:sp b)))
+             1e-6)
+          "speed is the Spark's speed"))))
+
+(deftest a-miss-is-lost
+  (fresh! 1011)
+  (g/launch!)
+  ;; park the trowel in a corner and let the Spark come back past it
+  (let [evs (atom [])]
+    (dotimes [_ 800]
+      (g/steer! 0.02 0 0 [8.0 8.0])
+      (g/update! 0.02)
+      (swap! evs into (g/drain-events!)))
+    (is (some #(= :lost (first %)) @evs))))
+
+(deftest camera-round-trip
+  (fresh! 1)
+  (doseq [[x y] [[1.0 1.0] [4.0 4.0] [7.0 2.5]]]
+    (let [[u v _] (g/proj x y 0.0) [x2 y2] (g/unproject-near u v)]
+      (is (< (math/abs (- x x2)) 1e-6))
+      (is (< (math/abs (- y y2)) 1e-6)))))

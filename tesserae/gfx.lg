@@ -490,7 +490,7 @@
         start-len (.length sb)
         k (:k scr) kinv (/ 1.0 k)
         xf (:xf scr) c (aget xf 0) s (aget xf 1) ident? (== 1.0 (aget xf 2))
-        t3? (== 1.0 (aget xf 3)) b3 (:b3 scr)   ; 3D table: base comes from b3
+        t3? (>= (aget xf 3) 1.0) b3 (:b3 scr)   ; 3D table / Glass House: base comes from b3
         wc (:wcache scr)
         ar (:acc-r scr) ag (:acc-g scr) ab (:acc-b scr)
         px (fn [x y]
