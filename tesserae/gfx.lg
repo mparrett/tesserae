@@ -54,6 +54,22 @@
         (aset a c (quot (+ (* inner 255) (quot PLEVELS 2)) PLEVELS))))
     a))
 
+(defmacro post8
+  "(aget post-lut (clamp8 r)) for a number r, as a tree of comparisons against
+   literal thresholds (6 per channel). In AOT-lowered code with r a native
+   double this stays native, where (int x) and aget would box. Level j starts
+   at the integer ceil((255j - 127) / PLEVELS), and floor(r) >= t iff r >= t,
+   so this matches the lut exactly."
+  [r]
+  (let [s (gensym "r")
+        thr (fn [j] (if (zero? j) 0 (quot (+ (- (* 255 j) 127) (dec PLEVELS)) PLEVELS)))
+        tree (fn tree [lo hi]
+               (if (= lo hi)
+                 (aget post-lut (thr lo))
+                 (let [mid (quot (+ lo hi 1) 2)]
+                   (list 'if (list '< s (double (thr mid))) (tree lo (dec mid)) (tree mid hi)))))]
+    (list 'let [s r] (tree 0 PLEVELS))))
+
 (defn post [r g b]
   (rgb (aget post-lut (clamp8 r)) (aget post-lut (clamp8 g)) (aget post-lut (clamp8 b))))
 

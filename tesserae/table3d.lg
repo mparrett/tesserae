@@ -234,85 +234,100 @@
 ;; ---------------------------------------------------------------------------
 ;; shading
 
-(def ^:private lut gfx/post-lut)
+;; AOT note. The per-pixel fns below take everything they compute with as
+;; ^double / ^long params, and render! reads P once per pass: in AOT-lowered Go
+;; a hinted param is a native float64/int64 and arithmetic on it stays native,
+;; while an aget result, a global def, (int x), max/min and math/* calls are
+;; boxed vm.Values whose arithmetic allocates per op. So: constants are inlined
+;; with K, posterizing uses gfx/post8 instead of the lut, and a value read from
+;; an array crosses into native code as an argument (a guarded unbox).
 
-(defmacro ^:private lit*
-  "Packed colour c times m (>= 0), plus a grey a (>= 0), posterized: gfx/post
-   inlined, for the per-pixel paths."
-  [c m a]
-  `(let [c# ~c m# ~m a# ~a
-         r# (+ (* m# (bit-and (bit-shift-right c# 16) 255)) a#)
-         g# (+ (* m# (bit-and (bit-shift-right c# 8) 255)) a#)
-         b# (+ (* m# (bit-and c# 255)) (* 0.8 a#))]
-     (bit-or (bit-or (bit-shift-left (aget lut (if (> r# 255.0) 255 (int r#))) 16)
-                     (bit-shift-left (aget lut (if (> g# 255.0) 255 (int g#))) 8))
-             (aget lut (if (> b# 255.0) 255 (int b#))))))
+(defmacro ^:private K
+  "The value of constant var s, inlined as a literal."
+  [s]
+  @(ns-resolve 'tesserae.table3d s))
 
-(defn- lit
-  "lit* as a function (m and a >= 0)."
-  [c ^double m ^double a]
-  (lit* c (max 0.0 m) a))
+(defmacro ^:private max0 [x] (let [s (gensym "m")] (list 'let [s x] (list 'if (list '< s 0.0) 0.0 s))))
+
+(defmacro ^:private ifloor
+  "(int (math/floor x)) for a double x, without the math/floor call."
+  [x]
+  (let [s (gensym "x") i (gensym "i")]
+    (list 'let [s x i (list 'int s)] (list 'if (list '< s i) (list 'dec i) i))))
+
+(defmacro ^:private sheen*
+  "Specular sheen at tile coords (gx, gy), sheen centre (sx0, sy0)."
+  [gx gy sx0 sy0]
+  `(let [dx# (- ~gx ~sx0) dy# (- ~gy ~sy0)
+         d2# (* 4.0 (+ (* dx# dx#) (* dy# dy#))) r2# ~(* SPEC-R SPEC-R)]
+     (if (< d2# r2#) (let [f# (- 1.0 (/ d2# r2#))] (* ~SPEC f# f#)) 0.0)))
+
+(defn- lit-px
+  "Packed colour c times m (>= 0), plus a grey a (>= 0), posterized."
+  ^long [^long c ^double m ^double a]
+  (let [r (+ (* m (bit-and (bit-shift-right c 16) 255)) a)
+        g (+ (* m (bit-and (bit-shift-right c 8) 255)) a)
+        b (+ (* m (bit-and c 255)) (* 0.8 a))]
+    (bit-or (bit-or (bit-shift-left (gfx/post8 r) 16) (bit-shift-left (gfx/post8 g) 8))
+            (gfx/post8 b))))
 
 (defn- tile-h [ix iy]
   (if (and (>= ix 0) (< ix 24) (>= iy 0) (< iy 24)) (aget hts (+ ix (* iy 24))) 0.0))
 
-(def ^:private WC (object-array 1))   ; the screen's world-pixel cache, set per render
-(def ^:private SI (int-array 1))      ; and its width S
+;; The per-render constants every shading fn below takes first:
+;;   wc  the screen's world-pixel cache    S   its width
+;;   H   P[11] top plane height            k2  2k (cache px per tile unit)
+;;   m0  P[33] floor/top light             sx0 sy0  P[38..39] sheen centre
+;;   lsx lsy  P[40..41] shadow step        oc  the colour off the table
 
 (defn- cache-at
-  "World-pixel cache colour at tile coords (gx, gy). P[45] = 2k, P[46] = S."
-  [scr ^double gx ^double gy]
-  (let [k2 (aget P 45) S (int (aget P 46))
-        u (int (* gx k2)) v (int (* gy k2))
+  "World-pixel cache colour at tile coords (gx, gy)."
+  [wc ^long S ^double k2 ^double gx ^double gy]
+  (let [u (int (* gx k2)) v (int (* gy k2))
         u (if (< u 0) 0 (if (>= u S) (dec S) u))
         v (if (< v 0) 0 (if (>= v S) (dec S) v))]
-    (aget (aget WC 0) (+ u (* v S)))))
-
-(defn- sheen [^double gx ^double gy]
-  (let [dx (- gx (aget P 38)) dy (- gy (aget P 39))
-        d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)]
-    (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)))
+    (aget wc (+ u (* v S)))))
 
 (defn- floor-col
   "The felt (or a pit) at tile coords (bx, by); (ax, ay) is where the same
    ray crossed the top plane."
-  [scr ^double ax ^double ay ^double bx ^double by]
+  [wc ^long S ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
+   ^double ax ^double ay ^double bx ^double by]
   (cond
     (or (< bx 0.0) (>= bx 24.0) (< by 0.0) (>= by 24.0))
     ;; off the board: the slab's edge, or the dark around the table
-    (let [f (/ SLAB (aget P 11))
+    (let [f (/ (K SLAB) H)
           cx (+ bx (* f (- bx ax))) cy (+ by (* f (- by ay)))]
       (if (and (>= cx 0.0) (< cx 24.0) (>= cy 0.0) (< cy 24.0))
         (let [face (cond (< bx 0.0) 34 (>= bx 24.0) 35 (< by 0.0) 36 :else 37)
               ;; how far down the edge the ray lands (0 top .. 1 foot)
               e (cond (< bx 0.0) (/ (- bx) (- cx bx)) (>= bx 24.0) (/ (- bx 24.0) (- bx cx))
                       (< by 0.0) (/ (- by) (- cy by)) :else (/ (- by 24.0) (- by cy)))]
-          (lit SLAB-C (* (aget P face) (- 1.0 (* 0.45 e))) 0.0))
-        (let [c @w/outside] (gfx/post (gfx/cr c) (gfx/cg c) (gfx/cb c)))))
+          (lit-px (K SLAB-C) (max0 (* (aget P face) (- 1.0 (* 0.45 e)))) 0.0))
+        oc))
     :else
     (let [ix (int bx) iy (int by) h (aget hts (+ ix (* iy 24)))]
       (if (< h 0.0)
         ;; a pit: a square hole PIT-D deep
-        (let [f (/ (- h) (aget P 11))
+        (let [f (/ (- h) H)
               dx (- bx ax) dy (- by ay)
               cx (+ bx (* f dx)) cy (+ by (* f dy))]
-          (if (and (== ix (int (math/floor cx))) (== iy (int (math/floor cy))))
-            (lit (cache-at scr bx by) 0.35 0.0)
+          (if (and (== ix (ifloor cx)) (== iy (ifloor cy)))
+            (lit-px (cache-at wc S k2 bx by) 0.35 0.0)
             ;; the far inner wall: which side the ray leaves through, how deep
             (let [ex (cond (> dx 0.0) (/ (- (+ ix 1.0) bx) (* f dx)) (< dx 0.0) (/ (- ix bx) (* f dx)) :else 9.0)
                   ey (cond (> dy 0.0) (/ (- (+ iy 1.0) by) (* f dy)) (< dy 0.0) (/ (- iy by) (* f dy)) :else 9.0)
                   face (if (< ex ey) (if (> dx 0.0) 34 35) (if (> dy 0.0) 36 37))
                   e (min ex ey)]
-              (lit PIT-WALL (* (aget P face) (- 1.0 (* 0.7 e))) 0.0))))
+              (lit-px (K PIT-WALL) (max0 (* (aget P face) (- 1.0 (* 0.7 e)))) 0.0))))
         (let [;; cast shadow: step toward the light, look for a column that tall
-              sx (aget P 40) sy (aget P 41)
-              h1 (tile-h (int (math/floor (+ bx (* 0.8 sx)))) (int (math/floor (+ by (* 0.8 sy)))))
-              h2 (tile-h (int (math/floor (+ bx (* 1.8 sx)))) (int (math/floor (+ by (* 1.8 sy)))))
+              h1 (tile-h (ifloor (+ bx (* 0.8 lsx))) (ifloor (+ by (* 0.8 lsy))))
+              h2 (tile-h (ifloor (+ bx (* 1.8 lsx))) (ifloor (+ by (* 1.8 lsy))))
               sh (- 1.0 (if (>= h1 0.8) 0.22 0.0) (if (>= h2 1.8) 0.18 0.0))]
-          (lit (cache-at scr bx by) (* (aget P 33) sh) (sheen bx by)))))))
+          (lit-px (cache-at wc S k2 bx by) (max0 (* m0 sh)) (sheen* bx by sx0 sy0)))))))
 
-(defn- top-col [scr ^double gx ^double gy]
-  (lit (cache-at scr gx gy) (* 1.08 (aget P 33)) (* 0.6 (sheen gx gy))))
+(defn- top-col [wc ^long S ^double k2 ^double m0 ^double sx0 ^double sy0 ^double gx ^double gy]
+  (lit-px (cache-at wc S k2 gx gy) (max0 (* 1.08 m0)) (* 0.6 (sheen* gx gy sx0 sy0))))
 
 (defn- side-col
   "Side face (light slot 34..37) of tile (ix, iy), hit at height z."
@@ -320,60 +335,103 @@
   (let [i (+ ix (* iy 24)) h (aget hts i)
         c (aget w/tbase i)
         ao (+ 0.5 (* 0.5 (/ z (max 0.3 h))))]
-    (lit c (* (aget P face) ao) 0.0)))
+    (lit-px c (max0 (* (aget P face) ao)) 0.0)))
 
-(defn sample3
+(defn- one-tile
+  "sample3 for a ray that stays over tile (ix, iy) of height h (most pixels)."
+  [wc ^long S ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
+   ^double ax ^double ay ^double bx ^double by ^long ix ^long iy ^double h]
+  (cond
+    (> h 0.0)
+    (let [t (- 1.0 (/ h H))
+          gx (+ ax (* t (- bx ax))) gy (+ ay (* t (- by ay)))
+          dx (- gx sx0) dy (- gy sy0)
+          d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* (K SPEC-R) (K SPEC-R))
+          a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* 0.6 (K SPEC) f f)) 0.0)]
+      (lit-px (aget wc (+ (int (* gx k2)) (* S (int (* gy k2))))) (* 1.08 m0) a))
+    (or (< h 0.0) (< ix 0) (> ix 23) (< iy 0) (> iy 23))
+    (floor-col wc S H k2 m0 sx0 sy0 lsx lsy oc ax ay bx by)
+    :else
+    (let [h1 (tile-h (ifloor (+ bx (* 0.8 lsx))) (ifloor (+ by (* 0.8 lsy))))
+          h2 (tile-h (ifloor (+ bx (* 1.8 lsx))) (ifloor (+ by (* 1.8 lsy))))
+          sh (- 1.0 (if (>= h1 0.8) 0.22 0.0) (if (>= h2 1.8) 0.18 0.0))
+          dx (- bx sx0) dy (- by sy0)
+          d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* (K SPEC-R) (K SPEC-R))
+          a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* (K SPEC) f f)) 0.0)]
+      (lit-px (aget wc (+ (int (* bx k2)) (* S (int (* by k2))))) (* m0 sh) a))))
+
+(defn- walk
+  "sample3's grid walk from the top plane down to the floor, from tile (ix, iy)."
+  [wc ^long S ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
+   ^double ax ^double ay ^double bx ^double by ^long ix ^long iy]
+  (let [dx (- bx ax) dy (- by ay)
+        sx (if (> dx 0.0) 1 -1) sy (if (> dy 0.0) 1 -1)
+        tdx (if (== dx 0.0) 1e9 (/ 1.0 (if (< dx 0.0) (- dx) dx)))
+        tdy (if (== dy 0.0) 1e9 (/ 1.0 (if (< dy 0.0) (- dy) dy)))]
+    (loop [ix ix iy iy tin 0.0 face 0
+           tmx (cond (> dx 0.0) (* (- (+ ix 1.0) ax) tdx) (< dx 0.0) (* (- ax ix) tdx) :else 1e9)
+           tmy (cond (> dy 0.0) (* (- (+ iy 1.0) ay) tdy) (< dy 0.0) (* (- ay iy) tdy) :else 1e9)]
+      (let [h (tile-h ix iy)
+            zin (* H (- 1.0 tin))
+            tm (if (< tmy tmx) tmy tmx)
+            tout (if (< tm 1.0) tm 1.0)]
+        (cond
+          (and (> h 0.0) (>= h zin))
+          (if (== 0 face)
+            (top-col wc S k2 m0 sx0 sy0 ax ay)
+            (side-col ix iy face zin))
+          (and (> h 0.0) (>= h (* H (- 1.0 tout))))
+          (let [t (- 1.0 (/ h H))]
+            (top-col wc S k2 m0 sx0 sy0 (+ ax (* t dx)) (+ ay (* t dy))))
+          (>= tout 1.0) (floor-col wc S H k2 m0 sx0 sy0 lsx lsy oc ax ay bx by)
+          (< tmx tmy) (recur (+ ix sx) iy tmx (if (> sx 0) 34 35) (+ tmx tdx) tmy)
+          :else (recur ix (+ iy sy) tmy (if (> sy 0) 36 37) tmx (+ tmy tdy)))))))
+
+(defn- sample3
   "Colour for the ray through top-plane point (ax, ay) and floor point
    (bx, by), tile coords."
-  [scr ^double ax ^double ay ^double bx ^double by]
-  (let [H (aget P 11)
-        ix (int (math/floor ax)) iy (int (math/floor ay))]
-    (if (and (== ix (int (math/floor bx))) (== iy (int (math/floor by))))
-      ;; the whole ray stays over one tile (most pixels): inlined
-      (let [h (tile-h ix iy)]
-        (cond
-          (> h 0.0)
-          (let [t (- 1.0 (/ h H))
-                gx (+ ax (* t (- bx ax))) gy (+ ay (* t (- by ay)))
-                k2 (aget P 45) S (aget SI 0)
-                dx (- gx (aget P 38)) dy (- gy (aget P 39))
-                d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)
-                a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* 0.6 SPEC f f)) 0.0)]
-            (lit* (aget (aget WC 0) (+ (int (* gx k2)) (* S (int (* gy k2))))) (* 1.08 (aget P 33)) a))
-          (or (< h 0.0) (< ix 0) (> ix 23) (< iy 0) (> iy 23))
-          (floor-col scr ax ay bx by)
-          :else
-          (let [sx (aget P 40) sy (aget P 41)
-                h1 (tile-h (int (math/floor (+ bx (* 0.8 sx)))) (int (math/floor (+ by (* 0.8 sy)))))
-                h2 (tile-h (int (math/floor (+ bx (* 1.8 sx)))) (int (math/floor (+ by (* 1.8 sy)))))
-                sh (- 1.0 (if (>= h1 0.8) 0.22 0.0) (if (>= h2 1.8) 0.18 0.0))
-                k2 (aget P 45) S (aget SI 0)
-                dx (- bx (aget P 38)) dy (- by (aget P 39))
-                d2 (* 4.0 (+ (* dx dx) (* dy dy))) r2 (* SPEC-R SPEC-R)
-                a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)]
-            (lit* (aget (aget WC 0) (+ (int (* bx k2)) (* S (int (* by k2))))) (* (aget P 33) sh) a))))
-      ;; grid walk from the top plane down to the floor
-      (let [dx (- bx ax) dy (- by ay)
-            sx (if (> dx 0.0) 1 -1) sy (if (> dy 0.0) 1 -1)
-            tdx (if (== dx 0.0) 1e9 (/ 1.0 (math/abs dx)))
-            tdy (if (== dy 0.0) 1e9 (/ 1.0 (math/abs dy)))]
-        (loop [ix ix iy iy tin 0.0 face 0
-               tmx (cond (> dx 0.0) (* (- (+ ix 1.0) ax) tdx) (< dx 0.0) (* (- ax ix) tdx) :else 1e9)
-               tmy (cond (> dy 0.0) (* (- (+ iy 1.0) ay) tdy) (< dy 0.0) (* (- ay iy) tdy) :else 1e9)]
-          (let [h (tile-h ix iy)
-                zin (* H (- 1.0 tin))
-                tout (min 1.0 (min tmx tmy))]
+  [wc ^long S ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
+   ^double ax ^double ay ^double bx ^double by]
+  (let [ix (ifloor ax) iy (ifloor ay)]
+    (if (and (== ix (ifloor bx)) (== iy (ifloor by)))
+      (one-tile wc S H k2 m0 sx0 sy0 lsx lsy oc ax ay bx by ix iy (tile-h ix iy))
+      (walk wc S H k2 m0 sx0 sy0 lsx lsy oc ax ay bx by ix iy))))
+
+(defn- render-row!
+  "One pixel row y of render!, starting from the homogeneous coordinates
+   (hx hy hw) on the top plane and (fx fy fw) on the floor, stepped by
+   (dhx dhy dhw) and (dfx dfy dfw) per block."
+  [b3 mark rmark wc ^long bw ^long bh ^long y ^long S ^long cols
+   ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
+   ^double hx ^double hy ^double hw ^double fx ^double fy ^double fw
+   ^double dhx ^double dhy ^double dhw ^double dfx ^double dfy ^double dfw]
+  (let [cy (quot y 2) crow (* cy cols) prow (* y S) r2 (* (K SPEC-R) (K SPEC-R))]
+    (loop [x 0 hx hx hy hy hw hw fx fx fy fy fw fw]
+      (when (< x S)
+        (let [fi (/ 0.5 fw)
+              bx (+ 12.0 (* fx fi)) by (+ 12.0 (* fy fi))
+              c (if (and (>= bx 0.0) (< bx 24.0) (>= by 0.0) (< by 24.0)
+                         (== 1 (aget clear (+ (int bx) (* 24 (int by))))))
+                  ;; clear felt: no column can be in the way or cast a shadow
+                  (let [dx (- bx sx0) dy (- by sy0)
+                        d2 (* 4.0 (+ (* dx dx) (* dy dy)))
+                        a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* (K SPEC) f f)) 0.0)]
+                    (lit-px (aget wc (+ (int (* bx k2)) (* S (int (* by k2))))) m0 a))
+                  (let [ih (/ 0.5 hw)]
+                    (sample3 wc S H k2 m0 sx0 sy0 lsx lsy oc (+ 12.0 (* hx ih)) (+ 12.0 (* hy ih)) bx by)))
+              i (+ x prow)]
+          (when (not (= c (aget b3 i)))
+            (aset b3 i c)
             (cond
-              (and (> h 0.0) (>= h zin))
-              (if (== 0 face)
-                (top-col scr ax ay)
-                (side-col ix iy face zin))
-              (and (> h 0.0) (>= h (* H (- 1.0 tout))))
-              (let [t (- 1.0 (/ h H))]
-                (top-col scr (+ ax (* t dx)) (+ ay (* t dy))))
-              (>= tout 1.0) (floor-col scr ax ay bx by)
-              (< tmx tmy) (recur (+ ix sx) iy tmx (if (> sx 0) 34 35) (+ tmx tdx) tmy)
-              :else (recur ix (+ iy sy) tmy (if (> sy 0) 36 37) tmx (+ tmy tdy)))))))))
+              (= bw 2)
+              (let [ci (+ x crow)]
+                (aset b3 (inc i) c) (aset b3 (+ i S) c) (aset b3 (+ i S 1) c)
+                (aset mark ci 1) (aset mark (inc ci) 1) (aset rmark cy 1))
+              (= bh 2)
+              (do (aset b3 (+ i S) c) (aset mark (+ x crow) 1) (aset rmark cy 1))
+              :else
+              (do (aset mark (+ x crow) 1) (aset rmark cy 1))))
+          (recur (+ x bw) (+ hx dhx) (+ hy dhy) (+ hw dhw) (+ fx dfx) (+ fy dfy) (+ fw dfw)))))))
 
 (defn render!
   "Draw the board into (:b3 scr) in blocks of bw x bh pixels (2x2 coarse,
@@ -383,51 +441,26 @@
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         b3 (:b3 scr) mark (:mark scr) rmark (:rmark scr)
         kinv (/ 1.0 k) du (* bw kinv) half (* 0.5 bh)
-        wc (:wcache scr) k2 (* 2.0 k) m0 (aget P 33) r2 (* SPEC-R SPEC-R)
-        sx0 (aget P 38) sy0 (aget P 39)
+        wc (:wcache scr) k2 (* 2.0 k)
+        H (aget P 11) m0 (aget P 33) sx0 (aget P 38) sy0 (aget P 39) lsx (aget P 40) lsy (aget P 41)
+        oc (let [c @w/outside] (gfx/post (gfx/cr c) (gfx/cg c) (gfx/cb c)))
         h00 (aget P 12) h01 (aget P 13) h02 (aget P 14)
         h10 (aget P 15) h11 (aget P 16) h12 (aget P 17)
         h20 (aget P 18) h21 (aget P 19) h22 (aget P 20)
         f00 (aget P 21) f01 (aget P 22) f02 (aget P 23)
         f10 (aget P 24) f11 (aget P 25) f12 (aget P 26)
-        f20 (aget P 27) f21 (aget P 28) f22 (aget P 29)]
-    (aset WC 0 wc) (aset SI 0 S) (aset P 45 k2) (aset P 46 (double S))
+        f20 (aget P 27) f21 (aget P 28) f22 (aget P 29)
+        dhx (* h00 du) dhy (* h10 du) dhw (* h20 du)
+        dfx (* f00 du) dfy (* f10 du) dfw (* f20 du)]
     (loop [y y0]
       (when (< y S)
         (let [v (- (* (+ y half) kinv) 24.0)
-              u0 (- (* 0.5 bw kinv) 24.0)
-              cy (quot y 2) crow (* cy cols) prow (* y S)]
+              u0 (- (* 0.5 bw kinv) 24.0)]
           ;; homogeneous coordinates, stepped along the row
-          (loop [x 0
-                 hx (+ (* h00 u0) (* h01 v) h02) hy (+ (* h10 u0) (* h11 v) h12) hw (+ (* h20 u0) (* h21 v) h22)
-                 fx (+ (* f00 u0) (* f01 v) f02) fy (+ (* f10 u0) (* f11 v) f12) fw (+ (* f20 u0) (* f21 v) f22)]
-            (when (< x S)
-              (let [fi (/ 0.5 fw)
-                    bx (+ 12.0 (* fx fi)) by (+ 12.0 (* fy fi))
-                    c (if (and (>= bx 0.0) (< bx 24.0) (>= by 0.0) (< by 24.0)
-                               (== 1 (aget clear (+ (int bx) (* 24 (int by))))))
-                        ;; clear felt: no column can be in the way or cast a shadow
-                        (let [dx (- bx sx0) dy (- by sy0)
-                              d2 (* 4.0 (+ (* dx dx) (* dy dy)))
-                              a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* SPEC f f)) 0.0)]
-                          (lit* (aget wc (+ (int (* bx k2)) (* S (int (* by k2))))) m0 a))
-                        (let [ih (/ 0.5 hw)]
-                          (sample3 scr (+ 12.0 (* hx ih)) (+ 12.0 (* hy ih)) bx by)))
-                    i (+ x prow)]
-                (when (not (= c (aget b3 i)))
-                  (aset b3 i c)
-                  (cond
-                    (= bw 2)
-                    (let [ci (+ x crow)]
-                      (aset b3 (inc i) c) (aset b3 (+ i S) c) (aset b3 (+ i S 1) c)
-                      (aset mark ci 1) (aset mark (inc ci) 1) (aset rmark cy 1))
-                    (= bh 2)
-                    (do (aset b3 (+ i S) c) (aset mark (+ x crow) 1) (aset rmark cy 1))
-                    :else
-                    (do (aset mark (+ x crow) 1) (aset rmark cy 1)))))
-              (recur (+ x bw)
-                     (+ hx (* h00 du)) (+ hy (* h10 du)) (+ hw (* h20 du))
-                     (+ fx (* f00 du)) (+ fy (* f10 du)) (+ fw (* f20 du))))))
+          (render-row! b3 mark rmark wc bw bh y S cols H k2 m0 sx0 sy0 lsx lsy oc
+                       (+ (* h00 u0) (* h01 v) h02) (+ (* h10 u0) (* h11 v) h12) (+ (* h20 u0) (* h21 v) h22)
+                       (+ (* f00 u0) (* f01 v) f02) (+ (* f10 u0) (* f11 v) f12) (+ (* f20 u0) (* f21 v) f22)
+                       dhx dhy dhw dfx dfy dfw))
         (recur (+ y ystep))))))
 
 ;; ---------------------------------------------------------------------------
