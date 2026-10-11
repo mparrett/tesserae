@@ -422,3 +422,18 @@ one conflict, in the ball draw call, and both sides were kept.
   and `spike-3d-variant-grid.{gif,png}` (frame-synchronized offline, board only).
 - **next:** sharp (full rows + cell) on AOT at about 24 fps, or cell with full rows only when a
   frame has budget. Coarser light quantization while moving would cut the cells compose emits.
+
+## 2026-10-11: unboxing the 3D render, game-side only (spike/table3d-unbox)
+
+- **surprise:** in AOT-lowered Go only `^double`/`^long` *params*, literals and `math/*` results
+  are native. `aget`, global defs, `(double x)`/`(int x)`/`(long x)`, `max`/`min` and calls to
+  sibling fns all come back as boxed `vm.Value`s, and `(let [^double x …])` makes the whole defn
+  fall back to bytecode. Unhinted float params get typed `int64` from their arithmetic, so float
+  callers fail the guard and run bytecode (`camera!`, `cache-rect!`).
+- **decision:** per-pixel work moves into fns whose numbers are all hinted params (`render-row!`,
+  `one-tile`, `walk`, `lit-px`, gfx `rot-sample`/`post-add`); P is read once per pass; constants
+  inline via a `K` macro; `gfx/post8` posterizes with a comparison tree equal to the lut.
+- **Result (full AOT, detent full-res frame):** 67 → 36 ms median; tilting baseline 16 → 10 ms,
+  sharp 37 → 18 ms, 2D rotated full compose 26–34 → 19–21 ms, rebuild cache 42 → 12 ms.
+  Output is byte-identical (2D and 3D hashes). What remains is array access (`aget` on a
+  double-array allocates a Float) and boxed int indices: let-go#358 territory.
