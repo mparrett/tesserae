@@ -20,6 +20,8 @@
             "--t3d-sweep" (recur (rest as) (assoc o :t3d-sweep true))       ; scripted tilt path
             "--t3d-fill" (recur (rest as) (assoc o :t3d-fill true))         ; 3D board fills the terminal
             "--no-fill" (recur (rest as) (assoc o :no-fill true))           ; Glass House: integer-scale arena, as 2D levels
+            "--gbox-edges" (recur (drop 2 as) (assoc o :gbox-edges (keyword b)))  ; Glass Box: fibre | ice | rainbow
+            "--gbox-far" (recur (drop 2 as) (assoc o :gbox-far (keyword b)))      ; Glass Box: holes | grid
             "--glass-parallax" (recur (rest as) (assoc o :glass-parallax true)) ; Glass House: camera follows the trowel
             "--autoplay" (recur (rest as) (assoc o :autoplay true))
             "--skip-card" (recur (rest as) (assoc o :skip-card true))

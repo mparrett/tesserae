@@ -587,4 +587,14 @@
            ""
            "Reach in. The trowel moves up and down now. Watch the ring on the walls: it shows how deep the Spark is."]}])
 
-(defn special-level [id] (first (filter #(= id (:id %)) (concat special-levels special-levels-glass))))
+;; 8.2 Glass Box (spike 2): the box is the bricks (tesserae.glassbox).
+(def special-levels-glassbox
+  [{:id "8.2" :name "Glass Box" :chapter "VIII · THE GLASS" :theme :glass :par 9999
+    :map map-empty :goal :glassbox :glassbox true
+    :card ["The room of glass had a smaller twin: a box with nothing in it, turning on no axis at all."
+           ""
+           "Its walls are the tesserae. Every pane the Spark strikes falls away, and where a pane is gone the Spark goes out."
+           ""
+           "Turn the box to keep glass in its way. Break as many as you can before it escapes."]}])
+
+(defn special-level [id] (first (filter #(= id (:id %)) (concat special-levels special-levels-glass special-levels-glassbox))))
