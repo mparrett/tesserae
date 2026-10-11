@@ -416,3 +416,22 @@ one conflict, in the ball draw call, and both sides were kept.
 - Lowering gaps found along the way (typed-array `aget`, `(double x)`/`(long x)` casts, re-boxed
   sibling results, `(let [^double x …])` falling back) are a data point for let-go#358; a draft
   comment is waiting.
+
+## 2026-10-11: wrap-up
+
+- **Tagline:** now "a mosaic breaker for the terminal" in both READMEs, the GitHub description
+  and the two pages. The original brief above keeps its wording.
+- **Write-up:** "The Tilt Table in 3D" is in `docs/table3d/` (standalone HTML, live in-browser
+  demo), linked from the README; Pages deploy later. Principles for this kind of page are kept
+  in internal workspace notes.
+- **State of the branches:**
+  - `main`: the v0–v2 game (15 levels), renderer unboxing, full AOT tooling, profiling hook.
+  - `spike/table3d` (= `spike/table3d-unbox`): the 3D table, motion variants, unboxing and
+    `--t3d-fill`, under evaluation. Not merged into main; a merge from main conflicts in
+    `gfx.lg` (the same unboxing arrived by two routes) and needs a hand resolve when the spike
+    lands.
+  - let-go fork `wt/tesserae-aot` (mparrett/let-go): tip + guarded typed-param overrides +
+    cached var reads; needed for the AOT build.
+- **Open decisions (the user's):** merge the 3D spike, make `--t3d-fill` the default with a
+  k≈2.5 cap, double-buffered detent, wide/pitched 3D camera, posting the #358 data point
+  (draft ready), a GitHub Pages deploy of `docs/table3d`, and the glass-cube 3D idea.
