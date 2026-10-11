@@ -2,7 +2,7 @@
   <img src="docs/banner.gif" alt="TESSERAE: the wordmark set from bevelled tetromino-coloured tiles, then rung by a passing Spark" width="740">
 </p>
 
-<p align="center"><i>A lunch-break mosaic breaker for the terminal, written in <a href="https://github.com/nooga/let-go">let-go</a>.</i></p>
+<p align="center"><i>A mosaic breaker for the terminal, written in <a href="https://github.com/nooga/let-go">let-go</a>.</i></p>
 
 > Above the world hangs the Mosaic: ten thousand living tesserae, each a shard of the
 > sky's memory. Then the Grout came. You are the last Lapidary. You carry a Trowel and a
