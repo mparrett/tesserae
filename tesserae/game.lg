@@ -62,9 +62,10 @@
 (defn fill3d?
   "--t3d-fill: on a 3D level the arena takes the largest square that fits the
    terminal (non-integer pixel scale; see gfx/make-screen). The Glass House
-   always does: it draws every screen pixel itself."
+   does by default (it draws every screen pixel itself); --no-fill keeps the
+   integer-scale arena the 2D levels use."
   []
-  (boolean (or (glass?) (and (:t3d-fill @opts) (view3d?)))))
+  (boolean (or (and (glass?) (not (:no-fill @opts))) (and (:t3d-fill @opts) (view3d?)))))
 
 ;; meta layer hooks (defined in the "meta layer" section near the end)
 (declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?

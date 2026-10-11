@@ -496,3 +496,6 @@ one conflict, in the ball draw call, and both sides were kept.
 - **let-go note:** an unclosed form at the end of a file is dropped silently; `levels.lg` lost
   everything after a missing paren with no error. Already upstream as let-go#807 (still open,
   reproduced on tip).
+- **`--no-fill`:** the integer-scale arena (as the 2D levels and the table before
+  `--t3d-fill`). Arena px, fill vs no-fill: 120×40 76 vs 48; 160×50 96 vs 96; 200×60 116 vs 96.
+  50 fps on AOT in both.

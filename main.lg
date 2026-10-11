@@ -19,6 +19,7 @@
             "--t3d-detent" (recur (rest as) (update o :t3d-mode (fnil conj #{}) :detent))
             "--t3d-sweep" (recur (rest as) (assoc o :t3d-sweep true))       ; scripted tilt path
             "--t3d-fill" (recur (rest as) (assoc o :t3d-fill true))         ; 3D board fills the terminal
+            "--no-fill" (recur (rest as) (assoc o :no-fill true))           ; Glass House: integer-scale arena, as 2D levels
             "--glass-parallax" (recur (rest as) (assoc o :glass-parallax true)) ; Glass House: camera follows the trowel
             "--autoplay" (recur (rest as) (assoc o :autoplay true))
             "--skip-card" (recur (rest as) (assoc o :skip-card true))

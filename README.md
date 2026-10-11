@@ -279,6 +279,8 @@ TESS_STORAGE_ID=glass ./play.sh --level 8.1          # story card, then play
 | SPACE / click | launch |
 
 Clear a whole tetracube for a SET. The last twelve bricks sing and bend the Spark toward them.
+The cube fills the terminal by default (the largest square beside the panel, at a non-integer
+scale); `--no-fill` keeps the integer-scale arena the 2D levels use (48, 96 or 144 px).
 `--glass-parallax` makes the camera follow the trowel (the cube turns a little as you move);
 it re-renders the whole scene per step, so it is slow for now, even on an AOT build (below,
 with `tesserae.glass` added to the namespaces). How it renders is in the header of
