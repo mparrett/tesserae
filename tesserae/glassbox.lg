@@ -83,32 +83,32 @@
 
 (defn- mat-rot!
   "R <- Rot(axis w, |w| dt) R: turn the box by angular velocity w (world)
-   over dt, then re-orthonormalize."
+   over dt, then re-orthonormalize (Gram-Schmidt on the columns)."
   [^double wx ^double wy ^double wz ^double dt]
-  (let [ang (* dt (math/sqrt (+ (* wx wx) (* wy wy) (* wz wz))))]
+  (let [wl (math/sqrt (+ (* wx wx) (* wy wy) (* wz wz)))
+        ang (* dt wl)]
     (when (> ang 1e-9)
-      (let [l (/ (* dt 1.0) ang) kx (/ (* wx dt) ang) ky (/ (* wy dt) ang) kz (/ (* wz dt) ang)
+      (let [kx (/ wx wl) ky (/ wy wl) kz (/ wz wl)
             c (math/cos ang) s (math/sin ang) t (- 1.0 c)
             ;; Rodrigues
-            m [(+ c (* t kx kx)) (- (* t kx ky) (* s kz)) (+ (* t kx kz) (* s ky))
-               (+ (* t kx ky) (* s kz)) (+ c (* t ky ky)) (- (* t ky kz) (* s kx))
-               (- (* t kx kz) (* s ky)) (+ (* t ky kz) (* s kx)) (+ c (* t kz kz))]
-            r (vec R)
-            prod (vec (for [i (range 3) j (range 3)]
-                        (+ (* (nth m (* 3 i)) (nth r j))
-                           (* (nth m (+ 1 (* 3 i))) (nth r (+ 3 j)))
-                           (* (nth m (+ 2 (* 3 i))) (nth r (+ 6 j))))))]
-        ;; Gram-Schmidt on the columns keeps R a rotation
-        (let [col (fn [j] [(nth prod j) (nth prod (+ 3 j)) (nth prod (+ 6 j))])
-              nrm (fn [[x y z]] (let [l (math/sqrt (+ (* x x) (* y y) (* z z)))] [(/ x l) (/ y l) (/ z l)]))
-              dot (fn [a b] (+ (* (nth a 0) (nth b 0)) (* (nth a 1) (nth b 1)) (* (nth a 2) (nth b 2))))
-              e0 (nrm (col 0))
-              c1 (col 1) e1 (nrm (mapv - c1 (mapv #(* (dot c1 e0) %) e0)))
-              e2 [(- (* (nth e0 1) (nth e1 2)) (* (nth e0 2) (nth e1 1)))
-                  (- (* (nth e0 2) (nth e1 0)) (* (nth e0 0) (nth e1 2)))
-                  (- (* (nth e0 0) (nth e1 1)) (* (nth e0 1) (nth e1 0)))]]
-          (dotimes [i 3]
-            (aset R (* 3 i) (nth e0 i)) (aset R (+ 1 (* 3 i)) (nth e1 i)) (aset R (+ 2 (* 3 i)) (nth e2 i))))))))
+            m00 (+ c (* t kx kx)) m01 (- (* t kx ky) (* s kz)) m02 (+ (* t kx kz) (* s ky))
+            m10 (+ (* t kx ky) (* s kz)) m11 (+ c (* t ky ky)) m12 (- (* t ky kz) (* s kx))
+            m20 (- (* t kx kz) (* s ky)) m21 (+ (* t ky kz) (* s kx)) m22 (+ c (* t kz kz))
+            r0 (aget R 0) r1 (aget R 1) r2 (aget R 2) r3 (aget R 3) r4 (aget R 4)
+            r5 (aget R 5) r6 (aget R 6) r7 (aget R 7) r8 (aget R 8)
+            ;; columns of M R
+            a0 (+ (* m00 r0) (* m01 r3) (* m02 r6)) a1 (+ (* m10 r0) (* m11 r3) (* m12 r6)) a2 (+ (* m20 r0) (* m21 r3) (* m22 r6))
+            b0 (+ (* m00 r1) (* m01 r4) (* m02 r7)) b1 (+ (* m10 r1) (* m11 r4) (* m12 r7)) b2 (+ (* m20 r1) (* m21 r4) (* m22 r7))
+            al (math/sqrt (+ (* a0 a0) (* a1 a1) (* a2 a2)))
+            a0 (/ a0 al) a1 (/ a1 al) a2 (/ a2 al)
+            d (+ (* b0 a0) (* b1 a1) (* b2 a2))
+            b0 (- b0 (* d a0)) b1 (- b1 (* d a1)) b2 (- b2 (* d a2))
+            bl (math/sqrt (+ (* b0 b0) (* b1 b1) (* b2 b2)))
+            b0 (/ b0 bl) b1 (/ b1 bl) b2 (/ b2 bl)]
+        (aset R 0 a0) (aset R 3 a1) (aset R 6 a2)
+        (aset R 1 b0) (aset R 4 b1) (aset R 7 b2)
+        ;; third column: a x b
+        (aset R 2 (- (* a1 b2) (* a2 b1))) (aset R 5 (- (* a2 b0) (* a0 b2))) (aset R 8 (- (* a0 b1) (* a1 b0)))))))
 
 (defn to-box
   "World vector -> box frame (R^T v)."
@@ -235,7 +235,7 @@
           steep? (> (math/abs dv) (math/abs du))
           n (long (math/ceil (max (math/abs du) (math/abs dv))))
           iw (/ 1.0 1.7)
-          es (:edges @style)]
+          st (case (:edges @style) :ice 1 :rainbow 2 0)]
       (when (> n 0)
         (dotimes [j (inc n)]
           (let [f (/ (* 1.0 j) n) u (+ ua (* f du)) v (+ va (* f dv))
@@ -245,12 +245,11 @@
                 x3 (- (* 3.0 q) (math/floor (* 3.0 q)))
                 pulse (* 1.4 (max 0.0 (- 1.0 (* 9.0 (math/abs (- x3 0.5))))))
                 k (* inten (+ 0.75 pulse))
-                [cr cg cb] (case es
-                             :rainbow (let [c (hue q)] [(* k (gfx/cr c)) (* k (gfx/cg c)) (* k (gfx/cb c))])
-                             :ice (let [m (* 0.5 mixf)]
-                                    [(* k (+ 90.0 (* m 120.0))) (* k (+ 190.0 (* m 50.0))) (* k 255.0)])
-                             [(* k (+ FA-R (* mixf (- FB-R FA-R)))) (* k (+ FA-G (* mixf (- FB-G FA-G))))
-                              (* k (+ FA-B (* mixf (- FB-B FA-B))))])
+                ;; style 0 fibre (FIBRE-A..B), 1 ice, 2 rainbow (hue along q)
+                hc (if (= st 2) (hue q) 0)
+                cr (* k (cond (= st 1) (+ 90.0 (* 60.0 mixf)) (= st 2) (* 1.0 (gfx/cr hc)) :else (+ FA-R (* mixf (- FB-R FA-R)))))
+                cg (* k (cond (= st 1) (+ 190.0 (* 25.0 mixf)) (= st 2) (* 1.0 (gfx/cg hc)) :else (+ FA-G (* mixf (- FB-G FA-G)))))
+                cb (* k (cond (= st 1) 255.0 (= st 2) (* 1.0 (gfx/cb hc)) :else (+ FA-B (* mixf (- FB-B FA-B)))))
                 core (* 60.0 k pulse)
                 m (if steep? u v) mi (long (math/floor m)) o (long (math/floor (if steep? v u)))]
             (loop [d -2]

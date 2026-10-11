@@ -286,6 +286,18 @@ it re-renders the whole scene per step, so it is slow for now, even on an AOT bu
 with `tesserae.glass` added to the namespaces). How it renders is in the header of
 `tesserae/glass.lg`.
 
+## Glass Box (branch `spike/glass-box-2`)
+
+A sibling of Glass House: no bricks, the glass box is the bricks. Six faces of 4×4 panels
+tumble around the Spark; every panel it hits falls away, and through a hole it escapes. Turn the
+box (arrows) to keep glass in its way; the reticle shows where it will hit (red: a hole).
+
+```sh
+git checkout spike/glass-box-2
+TESS_STORAGE_ID=glass ./play.sh --level 8.2
+./play.sh --level 8.2 --gbox-edges rainbow --gbox-far grid   # look variants (fibre|ice|rainbow, holes|grid)
+```
+
 ## AOT build (optional)
 
 let-go can lower namespaces to native Go and bake them into a custom `lg`

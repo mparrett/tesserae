@@ -499,3 +499,38 @@ one conflict, in the ball draw call, and both sides were kept.
 - **`--no-fill`:** the integer-scale arena (as the 2D levels and the table before
   `--t3d-fill`). Arena px, fill vs no-fill: 120×40 76 vs 48; 160×50 96 vs 96; 200×60 116 vs 96.
   50 fps on AOT in both.
+
+## 2026-10-11: Glass Box, spike 2: the box is the bricks (spike/glass-box-2)
+
+- **What (user brief):** no blocks; the glass box itself is the bricks, 6 faces × 4×4 panels.
+  A panel the Spark hits knocks out; through a hole the Spark escapes and the run ends. Score:
+  panels knocked out. A demoscene tumble, glass with presence, fibre-optic edges. Branched off
+  `spike/glass-house` (sibling, to weigh against it); special level 8.2, `tesserae/glassbox.lg`.
+- **decision: you steer the tumble.** The brief has no trowel, so the arrows spin the box (on
+  top of an idle tumble that wanders between axes). The Spark flies straight in world space and
+  the box turns around it, so turning decides whether glass or a hole is in its way. A reticle on
+  the box marks the predicted impact: gold over glass, red over a hole.
+- **decision: draw lines, cache nothing.** Everything moves every frame, so the box is lines and
+  points into the light buffer over a static backdrop: cost follows line length, not area, and
+  no pose ever re-renders the arena.
+- **surprise: runs ended in 10–15 s whatever the steering.** Two causes. The bot judged impacts
+  for a still box (now a forward simulation of the turning box, 0.13 ms). And spinning fast the
+  walls move up to 12 units/s, three times the Spark: it knocked a panel, the wall swept past
+  it, and it left through its own fresh hole. Now bounces reflect relative to the moving wall
+  (a wall batting into the Spark sends it back) and a fresh hole holds for 0.3 s. Bot 20–51
+  panels, hands off 6–21: steering matters.
+- **Look:** the far faces' full grid made a tangle, so by default they show only their hole
+  rims (`--gbox-far grid` brings the grid back); near faces get seams, frost specks and a glint
+  at grazing angles. Edge variants: `--gbox-edges fibre` (cyan↔magenta with pulses, default),
+  `ice`, `rainbow`.
+- **Cost (160×50, 96 px arena, box turning every frame):** AOT 30–40 fps live (draw ~15 ms,
+  compose ~14 ms for ~1,600 changed cells, ~50 KB/frame); VM 12–20 fps. Compare Glass House with
+  parallax: one pose step is 80–110 ms on AOT. Compose and terminal bytes are now the larger
+  share: a turning wireframe changes most of the cells it touches.
+- **let-go AOT notes:** (1) a local `(fn ...)` the lowerer inlines can leave a Go variable
+  declared and unused (`nrm` in the first `mat-rot!`), which fails `go build`; rewritten as plain
+  arithmetic. (2) Lowered `fibre!` ran ~15× *slower* than its bytecode (100 ms vs 6.5 ms per
+  12 edges; the profile is allocation and boxed `NumMul`), so the build skips it:
+  `AOT_SKIP=fibre!`. Both worth a minimal repro upstream later.
+- Build: `AOT_SKIP=fibre! tools/build-aot.sh ... tesserae.gfx tesserae.world tesserae.table3d
+  tesserae.glass tesserae.glassbox` -> `lg-bin/lg-tesserae-aot-glassbox`.
