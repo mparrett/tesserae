@@ -279,9 +279,10 @@ TESS_STORAGE_ID=glass ./play.sh --level 8.1          # story card, then play
 | SPACE / click | launch |
 
 Clear a whole tetracube for a SET. The last twelve bricks sing and bend the Spark toward them.
-On the VM it runs at a fixed camera; an AOT build (below, with `tesserae.glass` added to the
-namespaces) is fast enough for the camera to follow the trowel (parallax). How it renders is in
-the header of `tesserae/glass.lg`.
+`--glass-parallax` makes the camera follow the trowel (the cube turns a little as you move);
+it re-renders the whole scene per step, so it is slow for now, even on an AOT build (below,
+with `tesserae.glass` added to the namespaces). How it renders is in the header of
+`tesserae/glass.lg`.
 
 ## AOT build (optional)
 

@@ -739,7 +739,7 @@
   (build! (:glass l) seed)
   (reset! G {:tx 4.0 :ty 4.0 :tvx 0.0 :tvy 0.0 :ball (new-ball 4.0 4.0)
              :ripples [] :shards [] :events [] :combo 0 :flash 0.0 :theme theme
-             :parallax (get-in l [:glass :parallax] :auto) :slow 0})
+             :parallax (get-in l [:glass :parallax] false) :slow 0})
   (swap! G assoc :singers (singers))
   (fit! (:S scr))
   (bg! scr theme)
@@ -971,9 +971,11 @@
 
 (defn frame!
   "Before the sprites: bring the static image up to date (pose detent from
-   the trowel, broken bricks). Parallax is :auto by default: it switches
-   itself off for the run if a full render is too slow for it (the VM; the
-   AOT build keeps it). Returns true when it rendered."
+   the trowel, broken bricks). Parallax (:parallax true, --glass-parallax)
+   re-renders the whole scene per detent step; :auto switches it off for the
+   run after two renders slower than PARALLAX-MS. Off by default: a full
+   render is ~200 ms on the VM and ~80-110 ms AOT. Returns true when it
+   rendered."
   [scr]
   (let [g @G
         par (:parallax g)

@@ -479,8 +479,13 @@ one conflict, in the ball draw call, and both sides were kept.
   pose (bricks and box faces read corners from it); a cached base layer (background, far walls,
   far edges) and an additive glass layer (panes, near edges) so a broken brick recomposites only
   its own screen box (97 → 5 ms); per-voxel face slots refreshed only around a hit (17 → ~3 ms);
-  inline plane maths in `raster!`. A full pose render is still ~130–180 ms on the VM, so
-  parallax is `:auto`: it switches itself off after two slow renders.
+  inline plane maths in `raster!`. Play runs at 40–50 fps on the VM at 160×50.
+- **deferral: parallax is opt-in (`--glass-parallax`).** A full pose render (every detent step)
+  costs ~210 ms on the VM and 76–110 ms on the full AOT build (172 defns native) at 76–96 px.
+  The AOT profile is the familiar one: 45% in `shade!`, most of it boxing (`convT64`,
+  `mallocgc`, `NumAdd`/`NumMul` on values from `aget`), i.e. let-go#358. Hoisting Q reads into
+  hinted params might give 2×, not the 6× parallax needs; a coarse-then-refine pose render
+  (as on the table) is the other route.
 - **surprise: rallies collapsed onto one line.** Trowel hits halved the sideways speed and the
   bot struck dead centre, so the Spark ended shuttling straight along z through its own tunnel.
   Now 65% of the sideways speed carries through, a hit never leaves it below 14% of the speed,
