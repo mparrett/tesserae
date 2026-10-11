@@ -53,6 +53,12 @@
   []
   (boolean (and (lv :tilt) (or (lv :view3d) (:view3d @opts)))))
 
+(defn fill3d?
+  "--t3d-fill: on a 3D level the arena takes the largest square that fits the
+   terminal (non-integer pixel scale; see gfx/make-screen)."
+  []
+  (boolean (and (:t3d-fill @opts) (view3d?))))
+
 ;; meta layer hooks (defined in the "meta layer" section near the end)
 (declare meta-won! meta-over! meta-epilogue! meta-init! meta-unlocked?
          meta-clear-tick! meta-clear-key! meta-overlay! meta-title-panel! meta-hud! meta-controls-row)
@@ -497,7 +503,7 @@
 (defn lodestones []
   (mapv w/tile-center (w/indices-where #(= % w/MAGNET))))
 
-(declare choose-ward! boss-init!)
+(declare choose-ward! boss-init! fit-screen!)
 
 (defn spawn-balls! []
   (let [l (lvl) starts (:starts @S)]
@@ -529,6 +535,7 @@
     (when (:core l) (boss-init! l))
     (when (:well l) (well-init!))
     (when (:orrery l) (orrery-init! l))
+    (fit-screen!)
     (gfx/set-angle! @scr 0.0)
     (gfx/rebuild-cache! @scr w/sample)
     (t3/set-mode! (:t3d-mode @opts))
@@ -1935,6 +1942,15 @@
   (term/write (str gfx/ESC "[0m" gfx/ESC "[48;2;0;0;0m" gfx/ESC "[2J"))
   (gfx/invalidate! @scr))
 
+(defn fit-screen!
+  "Rebuild the screen when the level wants the other layout (--t3d-fill)."
+  []
+  (let [want (fill3d?) sc @scr]
+    (when (not= want (boolean (:fill-req sc)))
+      (let [[tc tr] (or (term/size) [(:tc sc) (:tr sc)])]
+        (reset! scr (assoc (gfx/make-screen tc tr PANEL-W want) :fill-req want))
+        (clear-screen!)))))
+
 (defn enter-level! [li]
   (clear-screen!)
   (load-level! li)
@@ -1991,7 +2007,8 @@
   (let [st @S mode (:mode st) title? (title-li? (:li st))]
     (cond
       (= k :ctrl-c) (when-not *in-wasm* (reset! quit? true))   ; a browser tab can't quit
-      (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
+      (= k :resize) (do (reset! scr (assoc (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W (fill3d?))
+                                         :fill-req (fill3d?)))
                         (gfx/set-angle! @scr (:theta st))
                         (gfx/rebuild-cache! @scr w/sample)
                         (when (view3d?) (t3/enable! @scr (lv :hmap)))

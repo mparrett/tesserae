@@ -117,13 +117,25 @@
 (def HALFW 24.0)
 
 (defn make-screen
-  "Layout for a terminal of tc x tr cells with a side panel of panel-w cols."
-  [tc tr panel-w]
+  "Layout for a terminal of tc x tr cells with a side panel of panel-w cols.
+   The arena is S x S square pixels, k = S/48 pixels per world unit; k is an
+   integer so tiles land on cell boundaries. fill? (the 3D table only, which
+   raycasts every screen pixel) takes the largest framed square that fits
+   instead: k is then a double, and the world-pixel cache keeps an integer
+   resolution kc >= k (Sc = 48 kc pixels square)."
+  ([tc tr panel-w] (make-screen tc tr panel-w false))
+  ([tc tr panel-w fill?]
   (let [k (loop [k 4] (cond (zero? k) 0
                             (and (<= (+ (* 48 k) panel-w 2) tc) (<= (* 24 k) tr)) k
                             :else (recur (dec k))))
         k (max k 1)
-        S (* 48 k)
+        Sf (let [s (min (- tc panel-w 4) (* 2 (- tr 2)))] (- s (mod s 2)))
+        fill? (and fill? (> Sf (* 48 k)))
+        kc k
+        S (if fill? Sf (* 48 k))
+        k (if fill? (/ S 48.0) k)
+        kc (if fill? (int (math/ceil k)) kc)
+        Sc (* 48 kc)
         cols S
         rows (quot S 2)
         framed? (<= (+ rows 2) tr)
@@ -135,7 +147,7 @@
         gmode @glyph-mode
         [gcode gstr] (glyph-tables gmode)]
     (dotimes [i npx] (aset ovr i -1))
-    {:k k :S S :cols cols :rows rows :ox ox :oy oy :framed? framed?
+    {:k k :S S :kc kc :Sc Sc :fill? fill? :cols cols :rows rows :ox ox :oy oy :framed? framed?
      :tc tc :tr tr :panel-x (+ ox cols 3)
      :acc-r (double-array npx) :acc-g (double-array npx) :acc-b (double-array npx)
      :ovr ovr
@@ -148,13 +160,13 @@
      :chord (double-array 32)      ; shape-disc! scanline scratch: lo 0.., hi 16..
      :xf (double-array 16)        ; [cos sin identity?] of the field angle; 3.. the 3D table (see w->s)
      :b3 (int-array npx)          ; 3D table: lit colour per *screen* pixel (tesserae.table3d)
-     :wcache (int-array npx)      ; posterized static colour per *world* pixel
+     :wcache (int-array (* Sc Sc)) ; posterized static colour per *world* pixel (kc per unit)
      :sgr-cache (volatile! {})
      :full (atom true)
      :coarse (atom false)
      :cup-row (mapv (fn [cy] (str ESC "[" (+ oy cy) ";")) (range rows))
      :cup-col (mapv (fn [cx] (str (+ ox cx) "H")) (range cols))         ; one sample per 2x2 px block (rotation transitions)
-     :stats (int-array 4)}))      ; [cells-emitted bytes dirty-cells -]
+     :stats (int-array 4)})))     ; [cells-emitted bytes dirty-cells -]
 
 (defn too-small? [scr] (< (:tc scr) (+ 48 2 20)))
 
@@ -176,7 +188,7 @@
   "Re-sample the static layer into the world-pixel cache over the world box
    [x0,x1)x[y0,y1)."
   [scr static-fn ^double x0 ^double y0 ^double x1 ^double y1]
-  (let [k (:k scr) S (:S scr) wc (:wcache scr) kinv (/ 1.0 k)
+  (let [k (:kc scr) S (:Sc scr) wc (:wcache scr) kinv (/ 1.0 k)
         u0 (max 0 (int (math/floor (* x0 k)))) u1 (min S (int (math/ceil (* x1 k))))
         v0 (max 0 (int (math/floor (* y0 k)))) v1 (min S (int (math/ceil (* y1 k))))]
     (loop [v v0]

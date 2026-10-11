@@ -244,6 +244,7 @@ Experiments with how motion frames render (none is the default yet; see
 ./play.sh --level 4.3 --t3d-sharp       # both of the above
 ./play.sh --level 4.3 --t3d-detent      # the board angle snaps in 0.1 steps, each at full res
 ./play.sh --level 4.3 --t3d-sweep       # tilt follows a fixed path (matched captures)
+./play.sh --level 4.3 --t3d-fill        # the board fills the terminal (non-integer scale)
 ``` A terminal of 124×50 or more doubles the raster; the
 marble reads much better at 3–4× (around 220×80).
 

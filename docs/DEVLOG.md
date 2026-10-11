@@ -437,3 +437,19 @@ one conflict, in the ball draw call, and both sides were kept.
   sharp 37 → 18 ms, 2D rotated full compose 26–34 → 19–21 ms, rebuild cache 42 → 12 ms.
   Output is byte-identical (2D and 3D hashes). What remains is array access (`aget` on a
   double-array allocates a Float) and boxed int indices: let-go#358 territory.
+
+## 2026-10-11: --t3d-fill, the 3D board at a non-integer scale (spike)
+
+- **decision:** with `--t3d-fill`, a 3D level's arena is the largest framed square that fits
+  beside the panel: S = min(cols - 30, 2 * (rows - 2)) pixels, rounded down to even, at k = S/48
+  (a double). The world-pixel cache keeps an integer kc = ceil(k), so `render!` samples it at
+  2kc per tile and draws b3 at the screen's S. `load-level!` switches layouts between 3D and
+  2D levels. 2D levels and non-fill 3D are byte-identical (same hashes as before).
+- **Board px (cells), today → fill:** 120×40 48 → 76; 160×52 96 → 100; 200×60 96 → 116;
+  220×80 144 → 156. Height binds on all four, so a HUD row instead of the side panel would
+  shrink the board (72/96/112/152). The panel stays.
+- **Cost (full AOT, 4.3 sweep, median ms, int → fill):** tilting 3.4 → 6.4, 9.9 → 11.0,
+  9.6 → 12.4, 19.1 → 23.0; detent render 10 → 25, 32 → 34, 37 → 44, 71 → 78. It scales with
+  area. 120×40 gains the most and stays well inside budget.
+- Captures: `docs/captures/spike-3d-fill-{rest.png,detent.gif}` and `spike-3d-fill-off-*` (160×52).
+- **next:** cap k (about 2.5) or fall back to baseline motion when S > ~120.

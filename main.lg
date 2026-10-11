@@ -18,6 +18,7 @@
             "--t3d-sharp" (recur (rest as) (update o :t3d-mode (fnil into #{}) [:full-rows :cell]))
             "--t3d-detent" (recur (rest as) (update o :t3d-mode (fnil conj #{}) :detent))
             "--t3d-sweep" (recur (rest as) (assoc o :t3d-sweep true))       ; scripted tilt path
+            "--t3d-fill" (recur (rest as) (assoc o :t3d-fill true))         ; 3D board fills the terminal
             "--autoplay" (recur (rest as) (assoc o :autoplay true))
             "--skip-card" (recur (rest as) (assoc o :skip-card true))
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))

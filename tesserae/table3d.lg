@@ -275,8 +275,8 @@
   (if (and (>= ix 0) (< ix 24) (>= iy 0) (< iy 24)) (aget hts (+ ix (* iy 24))) 0.0))
 
 ;; The per-render constants every shading fn below takes first:
-;;   wc  the screen's world-pixel cache    S   its width
-;;   H   P[11] top plane height            k2  2k (cache px per tile unit)
+;;   wc  the screen's world-pixel cache    S   its width (Sc)
+;;   H   P[11] top plane height            k2  2kc (cache px per tile unit)
 ;;   m0  P[33] floor/top light             sx0 sy0  P[38..39] sheen centre
 ;;   lsx lsy  P[40..41] shadow step        oc  the colour off the table
 
@@ -401,7 +401,7 @@
   "One pixel row y of render!, starting from the homogeneous coordinates
    (hx hy hw) on the top plane and (fx fy fw) on the floor, stepped by
    (dhx dhy dhw) and (dfx dfy dfw) per block."
-  [b3 mark rmark wc ^long bw ^long bh ^long y ^long S ^long cols
+  [b3 mark rmark wc ^long bw ^long bh ^long y ^long S ^long Sc ^long cols
    ^double H ^double k2 ^double m0 ^double sx0 ^double sy0 ^double lsx ^double lsy oc
    ^double hx ^double hy ^double hw ^double fx ^double fy ^double fw
    ^double dhx ^double dhy ^double dhw ^double dfx ^double dfy ^double dfw]
@@ -416,9 +416,9 @@
                   (let [dx (- bx sx0) dy (- by sy0)
                         d2 (* 4.0 (+ (* dx dx) (* dy dy)))
                         a (if (< d2 r2) (let [f (- 1.0 (/ d2 r2))] (* (K SPEC) f f)) 0.0)]
-                    (lit-px (aget wc (+ (int (* bx k2)) (* S (int (* by k2))))) m0 a))
+                    (lit-px (aget wc (+ (int (* bx k2)) (* Sc (int (* by k2))))) m0 a))
                   (let [ih (/ 0.5 hw)]
-                    (sample3 wc S H k2 m0 sx0 sy0 lsx lsy oc (+ 12.0 (* hx ih)) (+ 12.0 (* hy ih)) bx by)))
+                    (sample3 wc Sc H k2 m0 sx0 sy0 lsx lsy oc (+ 12.0 (* hx ih)) (+ 12.0 (* hy ih)) bx by)))
               i (+ x prow)]
           (when (not (= c (aget b3 i)))
             (aset b3 i c)
@@ -441,7 +441,7 @@
   (let [k (:k scr) S (:S scr) cols (:cols scr)
         b3 (:b3 scr) mark (:mark scr) rmark (:rmark scr)
         kinv (/ 1.0 k) du (* bw kinv) half (* 0.5 bh)
-        wc (:wcache scr) k2 (* 2.0 k)
+        wc (:wcache scr) Sc (:Sc scr) k2 (* 2.0 (:kc scr))
         H (aget P 11) m0 (aget P 33) sx0 (aget P 38) sy0 (aget P 39) lsx (aget P 40) lsy (aget P 41)
         oc (let [c @w/outside] (gfx/post (gfx/cr c) (gfx/cg c) (gfx/cb c)))
         h00 (aget P 12) h01 (aget P 13) h02 (aget P 14)
@@ -457,7 +457,7 @@
         (let [v (- (* (+ y half) kinv) 24.0)
               u0 (- (* 0.5 bw kinv) 24.0)]
           ;; homogeneous coordinates, stepped along the row
-          (render-row! b3 mark rmark wc bw bh y S cols H k2 m0 sx0 sy0 lsx lsy oc
+          (render-row! b3 mark rmark wc bw bh y S Sc cols H k2 m0 sx0 sy0 lsx lsy oc
                        (+ (* h00 u0) (* h01 v) h02) (+ (* h10 u0) (* h11 v) h12) (+ (* h20 u0) (* h21 v) h22)
                        (+ (* f00 u0) (* f01 v) f02) (+ (* f10 u0) (* f11 v) f12) (+ (* f20 u0) (* f21 v) f22)
                        dhx dhy dhw dfx dfy dfw))
