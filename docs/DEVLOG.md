@@ -453,3 +453,41 @@ one conflict, in the ball draw call, and both sides were kept.
   area. 120×40 gains the most and stays well inside budget.
 - Captures: `docs/captures/spike-3d-fill-{rest.png,detent.gif}` and `spike-3d-fill-off-*` (160×52).
 - **next:** cap k (about 2.5) or fall back to baseline motion when S > ~120.
+
+## 2026-10-11: Glass House, breakout inside a glass cube (spike/glass-house)
+
+- **What:** special level 8.1 *Glass House* (`--level 8.1`), the glass-cube idea from the
+  wrap-up. The box is 8×8×8 units; bricks are tetracubes (the five planar tetrominoes plus the
+  tripod and both screws) packed into the back half by seed; the trowel is a square on the near
+  face that moves in x and y (keys, mouse, bot); the Spark bounces off the glass and the back and
+  is lost past the near face beside the trowel. Where it lands on the trowel steers it, in two
+  axes. Clearing a whole tetracube is a SET. All in `tesserae/glass.lg` (one namespace, ~1100
+  lines); the game sees it through a few hooks (`update-glass!`, `glass-event!`, `draw!`).
+- **decision: branch off `spike/table3d`, not `main`,** because it reuses that branch's special
+  levels, `--level <id>`, the fill layout and compose!'s b3 base (xf[3] = 2 means "b3, sprites in
+  screen units"). If the 3D table never merges, those few pieces move with Glass House.
+- **decision: forward projection, not per-pixel rays.** The scene is a few hundred quads. Each
+  is scan-converted with 1/z, s/z and t/z affine in screen space (exact on a plane), so faces
+  get perspective-correct coordinates (grid lines, piece outlines) and a 1/z depth buffer
+  resolves bricks against walls and the Spark against bricks.
+- **Depth cues:** a gold ring on the four walls at the Spark's depth (depth-tested, so bricks
+  hide it), a floor shadow, the Spark's mark on the near face (green over the trowel, red off
+  it), size by depth, fog on far bricks, ripples where the Spark hits glass, and parallax: the
+  eye follows the trowel in 0.012 rad detents.
+- **surprise: the VM is ~5 µs per pixel per pass.** The first full render took 240–480 ms at
+  76×76 px (7 fps in play). Fixes, in order of effect: project the 9³ integer lattice once per
+  pose (bricks and box faces read corners from it); a cached base layer (background, far walls,
+  far edges) and an additive glass layer (panes, near edges) so a broken brick recomposites only
+  its own screen box (97 → 5 ms); per-voxel face slots refreshed only around a hit (17 → ~3 ms);
+  inline plane maths in `raster!`. A full pose render is still ~130–180 ms on the VM, so
+  parallax is `:auto`: it switches itself off after two slow renders.
+- **surprise: rallies collapsed onto one line.** Trowel hits halved the sideways speed and the
+  bot struck dead centre, so the Spark ended shuttling straight along z through its own tunnel.
+  Now 65% of the sideways speed carries through, a hit never leaves it below 14% of the speed,
+  and the bot strikes off-centre (a new spot each return).
+- **The tail:** the bot cleared 136 bricks in 233 s, the last 11 taking 110 s. The last 12
+  bricks now *sing* (as in the 2D levels): they pulse and bend the Spark toward the nearest one
+  (9 units/s², speed unchanged). Bot clear: 166 s. Par 3:30.
+- **let-go note:** an unclosed form at the end of a file is dropped silently; `levels.lg` lost
+  everything after a missing paren with no error. Already upstream as let-go#807 (still open,
+  reproduced on tip).

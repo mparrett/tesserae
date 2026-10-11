@@ -260,6 +260,29 @@ LG=../lg-tesserae-aot-3d ./play.sh --level 4.3 --3d --stats
 On the full AOT binary a tilting frame takes about 19 ms (median, High Table, k=2; 35 ms on the
 VM), so tilting holds around 50 fps.
 
+## Glass House (branch `spike/glass-house`)
+
+Breakout inside a glass cube: special level 8.1, branched off the 3D table spike. Tetracube
+bricks hang in the back half of an 8×8×8 box; your trowel is a square on the near face that
+moves up and down as well as left and right. A gold ring on the walls shows how deep the Spark
+is, and its mark on the near face turns green when the trowel is under it.
+
+```sh
+git checkout spike/glass-house
+TESS_STORAGE_ID=glass ./play.sh --level 8.1          # story card, then play
+./play.sh --level 8.1 --skip-card --autoplay --stats  # watch the bot
+```
+
+| keys | |
+|---|---|
+| ← ↑ → ↓ / WASD / mouse | move the trowel on the near face |
+| SPACE / click | launch |
+
+Clear a whole tetracube for a SET. The last twelve bricks sing and bend the Spark toward them.
+On the VM it runs at a fixed camera; an AOT build (below, with `tesserae.glass` added to the
+namespaces) is fast enough for the camera to follow the trowel (parallax). How it renders is in
+the header of `tesserae/glass.lg`.
+
 ## AOT build (optional)
 
 let-go can lower namespaces to native Go and bake them into a custom `lg`
@@ -317,6 +340,7 @@ tesserae/world.lg      335  24x24 tile grid (flat arrays), tetromino packer, pix
 tesserae/meta.lg       148  saved progress (let-go storage), unlocks, par medals
 tesserae/custom.lg     142  custom map EDN format: validate, read, write, -> level
 tesserae/input.lg      128  kitty key protocol, repeat-hold fallback, SGR mouse motion
+tesserae/glass.lg     1167  Glass House (spike): voxel bricks, 3D physics, forward-projection renderer
 levels/custom/              custom maps (EDN)
 test/                  276  clojure.test suites, run by tools/test.sh
 tools/                      capture (tmux -> PNG/GIF), level runner, sim, banner, AOT/web builds

@@ -1151,7 +1151,7 @@
     ;; the singers pulse
     (doseq [[x y z] (:singers g)]
       (let [[u v iz] (proj x y z) F (aget C 12)]
-        (glow-px! scr u v (* 1.6 F iz) 0.0 0xfff0c0 (+ 0.30 (* 0.2 (math/sin (+ (* 5.0 t) x z)))))))
+        (glow-px! scr u v (* 0.85 F iz) 0.0 0xfff0c0 (+ 0.45 (* 0.2 (math/sin (+ (* 5.0 t) x z)))))))
     (ripples! scr)
     (doseq [s (:shards g)]
       (let [[u v iz] (proj (:x s) (:y s) (:z s))]
