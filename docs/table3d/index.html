@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Tilt Table in 3D</title>
+<meta name="description" content="How TESSERAE's terminal tilt table renders in 3D: inverse homographies, a heightfield walk, motion modes and the profiling that halved its frame time, with a live demo you can tilt.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column on the game's felt-and-steel palette; the live demo sits
+   in a framed "table" panel, diagrams and tables break out to the column's full width. */
+:root {
+  color-scheme: dark;
+  --night: #071009;     /* page ground: the table room */
+  --felt: #0f3a1e;      /* surfaces */
+  --felt-hi: #165a2e;
+  --steel: #8a94a8;     /* hairlines, wall colour */
+  --chalk: #e8ecf2;     /* text */
+  --dust: #a3b0a8;      /* secondary text */
+  --lamp: #ffe28a;      /* accent: the table lamp */
+  --display: "Major Mono Display", "JetBrains Mono", ui-monospace, monospace;
+  --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+body { background: var(--night); color: var(--chalk); font: 17px/1.65 var(--body); }
+.wrap { max-width: 860px; margin: 0 auto; padding-inline: 20px; padding-block: 44px 90px; display: grid; gap: 52px; }
+header { display: grid; gap: 14px; }
+h1 { font: 400 clamp(2rem, 5.6vw, 3.4rem)/1.05 var(--display); margin: 0; letter-spacing: .03em; text-wrap: balance; }
+h1 em { color: var(--lamp); font-style: normal; }
+.kicker { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dust); }
+.lede { margin: 0; color: var(--dust); max-width: 62ch; font-size: 1.08rem; }
+h2 { font: 400 1.45rem/1.2 var(--display); margin: 0; letter-spacing: .04em; text-wrap: balance; }
+.sec { display: grid; gap: 16px; }
+.sec p { margin: 0; max-width: 66ch; }
+.sec p.dim { color: var(--dust); }
+code { font: .86em var(--mono); background: #12261a; padding: 1px 5px; border-radius: 3px; color: var(--chalk); }
+figure { margin: 0; display: grid; gap: 10px; }
+figure img { width: 100%; height: auto; image-rendering: pixelated; border: 1px solid #23452e; border-radius: 3px; background: #000; }
+figcaption { color: var(--dust); font-size: .93rem; }
+figcaption b { color: var(--chalk); }
+
+/* the demo table */
+.table { background: linear-gradient(#0c2414, #08180d); border: 1px solid #2c5a3a; border-radius: 6px; padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 240px); gap: 20px; align-items: start; }
+@media (max-width: 720px) { .table { grid-template-columns: 1fr; } }
+.screen { position: relative; aspect-ratio: 1; width: 100%; max-width: 100%; background: #000; border: 1px solid #23452e; }
+.screen canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.controls { display: grid; gap: 14px; font: 13px/1.4 var(--mono); color: var(--dust); }
+.controls label { display: grid; gap: 6px; }
+.controls input[type=range] { width: 100%; accent-color: var(--lamp); }
+.controls .row { display: flex; gap: 8px; align-items: center; }
+.controls input[type=checkbox] { accent-color: var(--lamp); width: 16px; height: 16px; }
+.controls button { font: 600 13px var(--mono); background: var(--felt-hi); color: var(--chalk); border: 1px solid #2f7a45; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.controls button:focus-visible, .controls input:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+.readout { font: 12px/1.5 var(--mono); color: var(--dust); border-top: 1px solid #23452e; padding-top: 10px; font-variant-numeric: tabular-nums; }
+.readout b { color: var(--lamp); font-weight: 600; }
+
+ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 18px; counter-reset: s; }
+ol.steps li { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 10px; counter-increment: s; }
+ol.steps li::before { content: counter(s); font: 400 1.3rem/1.3 var(--display); color: var(--lamp); }
+ol.steps h3 { margin: 0 0 4px; font: 700 1rem var(--body); }
+ol.steps p { margin: 0; color: var(--dust); max-width: 62ch; }
+.diagram { overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 520px; height: auto; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font: 14px/1.4 var(--mono); }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #23452e; }
+th { color: var(--dust); font-weight: 400; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; color: var(--lamp); white-space: nowrap; }
+.bars { display: grid; gap: 8px; font: 13px var(--mono); }
+.bar { display: grid; grid-template-columns: minmax(0, 13em) minmax(0, 1fr) 3.5em; gap: 10px; align-items: center; }
+.bar span.track { height: 12px; background: #12261a; border-radius: 2px; position: relative; }
+.bar span.fill { position: absolute; inset: 0 auto 0 0; background: var(--steel); border-radius: 2px; }
+.bar span.fill.box { background: #c86a4a; }
+.bar .v { text-align: right; color: var(--chalk); font-variant-numeric: tabular-nums; }
+footer { color: var(--dust); font: 13px var(--mono); border-top: 1px solid #23452e; padding-top: 16px; }
+footer a, .sec a { color: var(--lamp); }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<style>html,body{margin:0}img{max-width:100%}</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="kicker">TESSERAE · spike/table3d</span>
+    <h1>the tilt table in <em>3d</em></h1>
+    <p class="lede">The game's labyrinth level is a flat 24×24 board in a terminal. When you tilt it, it leans in perspective: walls show their sides, pits are holes, and the lamp's sheen slides across the felt. It's still made of <code>▀</code> characters. Below is how the renderer works, with a live version you can tilt yourself.</p>
+  </header>
+
+  <figure>
+    <img src="img/spike-3d-tilt-up-left.png" alt="High Table tilted up and to the left in the terminal: a felt board in perspective with extruded grey walls, corner towers, a walled keep, gold lamps and dark pits" width="1364" height="1169">
+    <figcaption><b>4.3 High Table, tilted up and left.</b> A real terminal frame, about 96×48 cells: every cell is two square pixels stacked, foreground on top and background below.</figcaption>
+  </figure>
+
+  <section class="sec">
+    <h2>tilt it yourself</h2>
+    <p>This is a small JavaScript copy of the same algorithm on a 12×12 board: the same camera, inverse homographies, heightfield walk and lighting. The pixels are drawn in pairs, the way a terminal cell holds them. Turn on the cell grid to see the pairing, or switch to the coarse 2×2 sampling the game uses while you tilt.</p>
+    <div class="table">
+      <div class="screen"><canvas id="cv" width="96" height="96" aria-label="Live render of a small tilt table"></canvas></div>
+      <div class="controls">
+        <label for="tx">tilt left ↔ right <input id="tx" type="range" min="-1" max="1" step="0.01" value="-0.55"></label>
+        <label for="ty">tilt back ↕ front <input id="ty" type="range" min="-1" max="1" step="0.01" value="-0.45"></label>
+        <div class="row"><input id="cells" type="checkbox"><label for="cells">show terminal cells</label></div>
+        <div class="row"><input id="coarse" type="checkbox"><label for="coarse">coarse 2×2 (motion mode)</label></div>
+        <div class="row"><input id="roll" type="checkbox" checked><label for="roll">roll the marble</label></div>
+        <div class="row"><button id="sweep" type="button">Sweep</button><button id="level" type="button">Level</button></div>
+        <div class="readout" id="ro">…</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>every pixel asks backwards</h2>
+    <p>The game never draws polygons. For each screen pixel it asks one question: what part of the table is under here? That's the same approach as the 2D game, where turning the field is a change in how pixels are sampled, not in what's drawn. 3D swaps in a richer answer to that question.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 640 260" role="img" aria-label="Side view: a camera above a tilted board casts a ray through a screen pixel; the ray crosses the plane at the tallest column height and the felt plane, and a walk between those two points finds the first column it enters">
+        <rect x="0" y="0" width="640" height="260" fill="#0a1d10"/>
+        <g font-family="JetBrains Mono, monospace" font-size="12" fill="#a3b0a8">
+          <circle cx="70" cy="40" r="7" fill="#ffe28a"/><text x="84" y="44">camera</text>
+          <line x1="40" y1="78" x2="140" y2="78" stroke="#e8ecf2" stroke-width="2"/><text x="148" y="82">screen pixel</text>
+          <g transform="rotate(8 360 200)">
+            <rect x="120" y="196" width="460" height="10" fill="#165a2e"/>
+            <rect x="330" y="142" width="40" height="54" fill="#8a94a8"/>
+            <rect x="460" y="168" width="40" height="28" fill="#8a94a8"/>
+            <line x1="120" y1="150" x2="580" y2="150" stroke="#ffe28a" stroke-dasharray="4 4" stroke-width="1"/>
+          </g>
+          <line x1="70" y1="40" x2="420" y2="226" stroke="#ffe28a" stroke-width="1.6"/>
+          <circle cx="295" cy="133" r="5" fill="#e8ecf2"/><text x="186" y="122">A: hits plane z = tallest</text>
+          <circle cx="352" cy="163" r="5" fill="#ff8a6a"/><text x="380" y="132">first column the walk enters</text>
+          <circle cx="408" cy="219" r="5" fill="#e8ecf2"/><text x="420" y="244">B: hits the felt (z = 0)</text>
+          <text x="470" y="30">board tilted by the arrow keys</text>
+          <text x="470" y="46">(up to ~11.5° each axis)</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>one frame, in order</h2>
+    <ol class="steps">
+      <li><div><h3>Pose the board</h3><p>The tilt <code>[tx ty]</code> from the arrow keys becomes a rotation of up to about 11.5° per axis. A perspective camera sits above the board's centre (distance 42, focal length 0.88 of that), so an untilted board nearly fills the arena, just like the flat game. The physics never sees this: tilt only drives gravity on the marble.</p></div></li>
+      <li><div><h3>Build the inverse maps</h3><p>For a flat plane at height <i>z</i>, board → screen is a 3×3 projective transform, a homography. Its inverse (the adjugate) sends a screen pixel straight back to the board point it shows. Two are built per frame: one for the plane at the tallest column's height, one for the felt.</p></div></li>
+      <li><div><h3>Walk the heightfield</h3><p>Along a view ray, board x and y change linearly with height, so the two inverse maps give points A and B that bound everything the ray can pass over. A short grid walk from A toward B, top down, finds the first column the ray enters: a wall side (lit by its facing, darker toward the base), a column top (the cached tile art, lit), or the felt. Pits have negative height, so the walk keeps going down into them.</p></div></li>
+      <li><div><h3>Light the felt</h3><p>The felt takes its brightness from the board normal against a fixed light, normalised so an untilted table looks exactly like the 2D game. Two short probes toward the light cast wall shadows. The lamp's reflection in the board plane makes a sheen that moves about twice as fast as the tilt, which is what makes small tilts read.</p></div></li>
+      <li><div><h3>Skip what can't be occluded</h3><p>About 30% of tiles have no column toward the camera's foot or toward the light, so their pixels skip the walk entirely. That shortcut was checked against the full walk with zero mismatched pixels across 18 level and tilt cases.</p></div></li>
+      <li><div><h3>Place the marble</h3><p>The marble's 3D centre is projected through the same camera and drawn as the game's glowing ball sprite, sized by depth, with a glint and a soft elliptical shadow stretched away from the light.</p></div></li>
+      <li><div><h3>Diff and emit</h3><p>The board goes into a screen-pixel buffer that the game's normal compositor reads. Only changed cells are re-emitted, with colour state tracked across cursor jumps, all inside one synchronised terminal frame. Holding the table still costs about 0.01 ms.</p></div></li>
+    </ol>
+  </section>
+
+  <section class="sec">
+    <h2>tilting without the blur</h2>
+    <p>Re-rendering every pixel on every small tilt step is expensive, so motion frames cut corners and refine once the tilt holds. How they cut corners decides how sharp a tilt looks:</p>
+    <figure>
+      <img src="img/spike-3d-variant-grid.png" alt="The same mid-tilt frame rendered four ways: baseline with combed edges, full rows blocky but coherent, per-cell sampling with crisper walls, and detent at full resolution" width="582" height="618" style="max-width:600px">
+      <figcaption><b>Same frame, four motion modes.</b> Baseline: 2×2 blocks, alternating rows (combing). Full rows: no combing, still blocky. Cell: one sample per terminal cell. Detent: the board snaps between tilt steps, each at full resolution, which is the sharpest.</figcaption>
+    </figure>
+    <div class="scroll"><table>
+      <thead><tr><th>mode (flag)</th><th>tilting frame, full AOT</th><th>read</th></tr></thead>
+      <tbody>
+        <tr><td>baseline</td><td class="n">~10 ms</td><td>blocky, combed while moving</td></tr>
+        <tr><td><code>--t3d-full-rows</code></td><td class="n">~29 ms*</td><td>coherent, blocky</td></tr>
+        <tr><td><code>--t3d-cell</code></td><td class="n">~31 ms*</td><td>crisp horizontally, banded</td></tr>
+        <tr><td><code>--t3d-sharp</code> (full rows + cell)</td><td class="n">~18 ms</td><td>coherent and crisp</td></tr>
+        <tr><td><code>--t3d-detent</code></td><td class="n">~36 ms per step</td><td>sharpest; steps visibly</td></tr>
+      </tbody>
+    </table></div>
+    <p class="dim">* Measured before the unboxing pass below, which roughly halved the others.</p>
+  </section>
+
+  <section class="sec">
+    <h2>where the time went</h2>
+    <p>The renderer is let-go code, AOT-lowered to native Go. A CPU profile of a full-resolution detent frame showed it wasn't the 3D maths that cost the time. Most of it was moving numbers in and out of boxes: values read from typed arrays come back as generic boxed values, and arithmetic on them allocates.</p>
+    <div class="bars" role="img" aria-label="Profile shares before unboxing: board render 56 percent, int and float boxing 24 percent, allocation 22 percent, GC marking 18 percent, generic arithmetic 19 percent, typed array reads 14 percent; shares overlap">
+      <div class="bar"><span>board render (cum)</span><span class="track"><span class="fill" style="width:56%"></span></span><span class="v">56%</span></div>
+      <div class="bar"><span>boxing (convT64)</span><span class="track"><span class="fill box" style="width:24%"></span></span><span class="v">24%</span></div>
+      <div class="bar"><span>allocation (mallocgc)</span><span class="track"><span class="fill box" style="width:22%"></span></span><span class="v">22%</span></div>
+      <div class="bar"><span>generic arithmetic</span><span class="track"><span class="fill box" style="width:19%"></span></span><span class="v">19%</span></div>
+      <div class="bar"><span>GC marking</span><span class="track"><span class="fill box" style="width:18%"></span></span><span class="v">18%</span></div>
+      <div class="bar"><span>typed-array reads</span><span class="track"><span class="fill box" style="width:14%"></span></span><span class="v">14%</span></div>
+    </div>
+    <p>Shares overlap (cumulative). Moving every per-pixel number into small functions with <code>^double</code>/<code>^long</code>-typed parameters, inlining constants, and replacing <code>max</code>, <code>min</code> and <code>floor</code> with plain conditionals took the full-resolution frame from <b>67 to 36 ms</b> and the tilting frame from <b>16 to 10 ms</b>, with byte-identical output. What's left (array element reads and integer indices) needs a compiler change: <a href="https://github.com/nooga/let-go/issues/358">let-go#358</a>.</p>
+    <p class="dim">Getting the whole renderer lowered at all needed a compiler fix first. One large function used to take over 95 minutes to compile; after <a href="https://github.com/nooga/let-go/pull/1051">let-go#1051</a> it takes about 70 seconds.</p>
+  </section>
+
+  <section class="sec">
+    <h2>play it</h2>
+<pre style="margin:0;overflow-x:auto;background:#0c2414;border:1px solid #23452e;border-radius:4px;padding:14px;font:13px/1.55 var(--mono);color:var(--chalk)">git clone https://github.com/mparrett/tesserae && cd tesserae
+git checkout spike/table3d
+./play.sh --level 4.3 --3d --t3d-detent      # High Table
+./play.sh --3d                               # every tilt level in 3D</pre>
+    <p class="dim">Needs <a href="https://github.com/nooga/let-go">let-go</a> and a truecolor terminal; 124×50 or larger doubles the raster. The README covers the optional AOT build.</p>
+  </section>
+
+  <footer>TESSERAE · a mosaic breaker for the terminal · <a href="https://github.com/mparrett/tesserae">github.com/mparrett/tesserae</a> (MIT)</footer>
+</div>
+
+<script>
+(() => {
+  // A tiny copy of tesserae/table3d.lg: inverse homographies + heightfield walk + lighting.
+  const N = 12;                 // board tiles
+  const P = 96;                 // pixels (square), rendered as N*8
+  const MAXT = 0.2;             // max tilt (rad), as in the game
+  const D = 22, F = 0.88 * D;   // camera distance / focal length (scaled to a 12-tile board)
+  const HMAX = 2.2, PIT = -1.2;
+  // heights: walls 1.3, towers 2.2, lamps 0.45, pits PIT, felt 0
+  const H = [], K = [];         // height, kind
+  const map = [
+    "############",
+    "#T....$...T#",
+    "#..##...x..#",
+    "#..#....#..#",
+    "#$.#.TT.#.$#",
+    "#....TT....#",
+    "#.x......x.#",
+    "#..#....#..#",
+    "#..##..##..#",
+    "#....$.....#",
+    "#T...x....T#",
+    "############"];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const c = map[y][x];
+    const h = c === '#' ? 1.3 : c === 'T' ? HMAX : c === '$' ? 0.45 : c === 'x' ? PIT : 0;
+    H.push(h); K.push(c);
+  }
+  const tileH = (x, y) => (x < 0 || y < 0 || x >= N || y >= N) ? -99 : H[(y | 0) * N + (x | 0)];
+  const tileK = (x, y) => K[(y | 0) * N + (x | 0)];
+
+  const cv = document.getElementById('cv'), g = cv.getContext('2d');
+  const W = cv.width, img = g.createImageData(W, W);
+  const $ = id => document.getElementById(id);
+  let tx = +$('tx').value, ty = +$('ty').value;
+  const marble = { x: 6.5, y: 7.5, vx: 0, vy: 0 };
+
+  function mul(a, b) { const r = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { let s = 0; for (let k = 0; k < 3; k++) s += a[i*3+k] * b[k*3+j]; r.push(s); } return r; }
+  function inv(m) {
+    const [a,b,c,d,e,f,g2,h,i] = m;
+    const A = e*i - f*h, B = -(d*i - f*g2), C = d*h - e*g2;
+    const det = a*A + b*B + c*C;
+    return [A, -(b*i - c*h), b*f - c*e, B, a*i - c*g2, -(a*f - c*d), C, -(a*h - b*g2), a*e - b*d].map(v => v / det);
+  }
+  function rot(tx, ty) {
+    const ax = ty * MAXT, ay = tx * MAXT;
+    const Rx = [1,0,0, 0,Math.cos(ax),-Math.sin(ax), 0,Math.sin(ax),Math.cos(ax)];
+    const Ry = [Math.cos(ay),0,Math.sin(ay), 0,1,0, -Math.sin(ay),0,Math.cos(ay)];
+    return mul(Rx, Ry);
+  }
+  // board point (x,y,h) -> world: R * (x-N/2, y-N/2, -h); camera looks down +z from z=-D
+  function homography(R, h) {
+    // columns: R0, R1, R2*(-h) + t ;  t moves board centre to origin and pushes it D away
+    const c = N / 2;
+    const tx0 = -R[0]*c - R[1]*c - R[2]*h, ty0 = -R[3]*c - R[4]*c - R[5]*h, tz0 = -R[6]*c - R[7]*c - R[8]*h + D;
+    const M = [R[0], R[1], tx0, R[3], R[4], ty0, R[6], R[7], tz0];
+    const Kc = [F, 0, 0, 0, F, 0, 0, 0, 1];
+    return mul(Kc, M);
+  }
+  const L = (() => { const v = [-0.45, -0.55, -1]; const n = Math.hypot(...v); return v.map(x => x / n); })();
+  const felt = [26, 92, 46], wall = [140, 148, 166], tower = [176, 184, 200], lamp = [255, 214, 110];
+  function shade(c, k) { return [c[0]*k, c[1]*k, c[2]*k]; }
+
+  function render(coarse) {
+    const R = rot(tx, ty);
+    const Htop = homography(R, HMAX), Hbot = homography(R, 0);
+    const It = inv(Htop), Ib = inv(Hbot);
+    const nb = [R[2]*-1, R[5]*-1, R[8]*-1];               // board up-normal in world
+    // L points from the surface toward the light (up is -z), so lit = n . L
+    const lamb0 = -L[2];                                   // untilted felt: n = (0,0,-1)
+    const lambF = Math.max(0, nb[0]*L[0] + nb[1]*L[1] + nb[2]*L[2]) / lamb0;
+    const scale = W / (N * 1.0) * 0.98;                    // screen units -> pixels
+    const step = coarse ? 2 : 1;
+    for (let py = 0; py < W; py += step) for (let px = 0; px < W; px += step) {
+      const sx = (px + 0.5 - W / 2) / scale, sy = (py + 0.5 - W / 2) / scale;
+      const pt = (Hm) => { const u = Hm[0]*sx + Hm[1]*sy + Hm[2], v = Hm[3]*sx + Hm[4]*sy + Hm[5], w = Hm[6]*sx + Hm[7]*sy + Hm[8]; return [u / w, v / w]; };
+      const A = pt(It), B = pt(Ib);
+      let col = [6, 14, 9];                                  // room
+      // walk from z=HMAX down to PIT
+      const steps = 40;
+      let prevH = HMAX, prevX = A[0], prevY = A[1];
+      for (let s = 0; s <= steps; s++) {
+        const h = HMAX + (PIT - HMAX) * s / steps;
+        const t = (HMAX - h) / HMAX;                          // A at t=0, B at t=1, extrapolated below
+        const x = A[0] + (B[0] - A[0]) * t, y = A[1] + (B[1] - A[1]) * t;
+        if (x < 0 || y < 0 || x >= N || y >= N) { if (h <= 0) { col = [28, 30, 34]; break; } prevH = h; prevX = x; prevY = y; continue; }
+        const th = tileH(x, y), kind = tileK(x, y);
+        if (th > 0 && h <= th) {
+          const top = prevH > th || s === 0;
+          const base = kind === 'T' ? tower : kind === '$' ? lamp : wall;
+          if (top) col = shade(base, 0.95 * lambF + 0.05);
+          else {   // side face: which side did we cross?
+            const fx = Math.floor(prevX) !== Math.floor(x), n = fx ? [Math.sign(x - prevX) * -1, 0, 0] : [0, Math.sign(y - prevY) * -1, 0];
+            const nw = [R[0]*n[0] + R[1]*n[1], R[3]*n[0] + R[4]*n[1], R[6]*n[0] + R[7]*n[1]];
+            const lam = Math.max(0.12, nw[0]*L[0] + nw[1]*L[1] + nw[2]*L[2]);
+            col = shade(base, 0.35 + 0.6 * lam * (0.6 + 0.4 * Math.max(0, h) / Math.max(th, 0.01)));
+          }
+          break;
+        }
+        if (h <= 0 && th >= 0) {   // felt (or the floor of a lamp/wall gap)
+          // two shadow probes toward the light
+          let sh = 1;
+          for (const d of [0.6, 1.2]) { if (tileH(x + L[0] * d * 1.4, y + L[1] * d * 1.4) > 0.6 * d) sh = 0.62; }
+          const cx = x - N / 2, cy = y - N / 2;
+          const sheen = Math.exp(-((cx + tx * 9) ** 2 + (cy + ty * 9) ** 2) / 10) * 70;
+          col = shade(felt, lambF * sh); col = [col[0] + sheen * 0.8, col[1] + sheen, col[2] + sheen * 0.6];
+          if ((x % 1) < 0.08 && (y % 1) < 0.08) col = [col[0] + 10, col[1] + 10, col[2] + 12];
+          break;
+        }
+        if (h <= PIT + 0.05) { col = [2, 4, 3]; break; }      // bottom of a pit
+        prevH = h; prevX = x; prevY = y;
+      }
+      for (let dy = 0; dy < step; dy++) for (let dx = 0; dx < step; dx++) {
+        const i = ((py + dy) * W + px + dx) * 4;
+        // posterize to 6 bits, as the terminal emitter does
+        img.data[i] = Math.min(255, col[0]) & 0xfc; img.data[i+1] = Math.min(255, col[1]) & 0xfc; img.data[i+2] = Math.min(255, col[2]) & 0xfc; img.data[i+3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    // marble: project its centre (board + radius) and draw a glow + shadow
+    const toScreen = (x, y, h) => { const Hm = homography(R, h); const u = Hm[0]*x + Hm[1]*y + Hm[2], v = Hm[3]*x + Hm[4]*y + Hm[5], w = Hm[6]*x + Hm[7]*y + Hm[8]; return [u / w * scale + W / 2, v / w * scale + W / 2]; };
+    const [shx, shy] = toScreen(marble.x + 0.18, marble.y + 0.22, 0);
+    g.fillStyle = 'rgba(0,0,0,0.45)'; g.beginPath(); g.ellipse(shx, shy, 3.4, 2.4, 0, 0, 7); g.fill();
+    const [mx, my] = toScreen(marble.x, marble.y, 0.32);
+    const gr = g.createRadialGradient(mx, my, 0.5, mx, my, 5); gr.addColorStop(0, '#fffbe8'); gr.addColorStop(0.35, '#ffe9b0'); gr.addColorStop(1, 'rgba(255,210,122,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(mx, my, 5, 0, 7); g.fill();
+    if ($('cells').checked) { g.fillStyle = 'rgba(255,226,138,0.18)'; for (let y = 2; y < W; y += 2) g.fillRect(0, y, W, 0.25); }
+  }
+
+  function physics(dt) {
+    if (!$('roll').checked) return;
+    marble.vx += tx * 9 * dt; marble.vy += ty * 9 * dt;
+    marble.vx *= 0.985; marble.vy *= 0.985;
+    for (const [axis, v] of [['x', 'vx'], ['y', 'vy']]) {
+      const n = marble[axis] + marble[v] * dt;
+      const tx2 = axis === 'x' ? n : marble.x, ty2 = axis === 'y' ? n : marble.y;
+      if (tileH(tx2, ty2) > 0.4) marble[v] *= -0.5; else marble[axis] = n;
+    }
+    if (tileH(marble.x, marble.y) < 0) { marble.x = 6.5; marble.y = 7.5; marble.vx = marble.vy = 0; }
+  }
+
+  let sweepT = null, last = performance.now(), frames = 0, acc = 0, ms = 0;
+  function tick(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (sweepT !== null) {
+      sweepT += dt;
+      tx = 0.9 * Math.sin(2 * Math.PI * sweepT / 3.2); ty = 0.9 * Math.sin(2 * Math.PI * sweepT / 4.8);
+      $('tx').value = tx; $('ty').value = ty;
+      if (sweepT > 9.6) sweepT = null;
+    }
+    physics(dt);
+    const t0 = performance.now(); render($('coarse').checked); ms += performance.now() - t0; frames++; acc += dt;
+    if (acc > 0.5) {
+      $('ro').innerHTML = `tilt <b>${tx >= 0 ? '+' : ''}${tx.toFixed(2)} ${ty >= 0 ? '+' : ''}${ty.toFixed(2)}</b><br>render <b>${(ms / frames).toFixed(1)} ms</b> · ${W}×${W} px = ${W}×${W/2} cells`;
+      frames = 0; acc = 0; ms = 0;
+    }
+    requestAnimationFrame(tick);
+  }
+  $('tx').addEventListener('input', e => { tx = +e.target.value; sweepT = null; });
+  $('ty').addEventListener('input', e => { ty = +e.target.value; sweepT = null; });
+  $('sweep').addEventListener('click', () => { sweepT = 0; });
+  $('level').addEventListener('click', () => { tx = ty = 0; $('tx').value = 0; $('ty').value = 0; sweepT = null; });
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) { render(false); $('ro').textContent = 'Animation paused (reduced motion). Move the sliders to re-render.'; ['tx','ty','cells','coarse'].forEach(id => $(id).addEventListener('input', () => render($('coarse').checked))); }
+  else requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

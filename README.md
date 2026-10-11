@@ -121,6 +121,13 @@ Physics runs at a fixed 240 Hz substep: axis-separated tile collisions, paddle b
 computed in the screen frame (so the field can turn under a moving ball), screen-frame
 gravity and tilt, and inverse-square lodestones.
 
+### The 3D tilt table
+
+The tilt levels have an experimental 3D view on the `spike/table3d` branch: a perspective
+camera over a tilting board, raycast per pixel. [`docs/table3d/`](docs/table3d/index.html) is a
+write-up of how it works, with a live in-browser demo you can tilt (open the HTML file locally,
+or from a Pages deploy).
+
 ## Editor
 
 ```sh
