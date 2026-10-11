@@ -78,7 +78,7 @@
 (def ^:private last-scr (atom nil))
 (def on? (atom false))
 
-(defn- norm3 [x y z] (let [l (math/sqrt (+ (* x x) (* y y) (* z z)))] [(/ x l) (/ y l) (/ z l)]))
+(defn- norm3 [^double x ^double y ^double z] (let [l (math/sqrt (+ (* x x) (* y y) (* z z)))] [(/ x l) (/ y l) (/ z l)]))
 
 (defn column-height
   "Default height of a tile type."
@@ -112,7 +112,7 @@
 
 (defn- inverse-map!
   "Adjugate of the plane z = h's projective map into P[off..off+8]."
-  [off h]
+  [off ^double h]
   (let [F (aget P 9) D (aget P 10)
         m00 (* F (aget P 0)) m01 (* F (aget P 1)) m02 (* F h (aget P 2))
         m10 (* F (aget P 3)) m11 (* F (aget P 4)) m12 (* F h (aget P 5))
@@ -127,19 +127,19 @@
     (aset P (+ off 7) (- (* m01 m20) (* m00 m21)))
     (aset P (+ off 8) (- (* m00 m11) (* m01 m10)))))
 
-(defn- face-light [nx ny nz]
+(defn- face-light [^double nx ^double ny ^double nz]
   ;; normalised so the untilted floor is exactly 1.0 (zero tilt matches 2D)
   (let [d (+ (* nx (aget P 30)) (* ny (aget P 31)) (* nz (aget P 32)))]
     (/ (+ AMB (* DIF (max 0.0 d))) (+ AMB (* DIF LZ)))))
 
-(defn- sgn [x] (if (> x 0.0) 1 (if (< x 0.0) -1 0)))
+(defn- sgn [^double x] (if (> x 0.0) 1 (if (< x 0.0) -1 0)))
 
 (defn- col-at? [x y]
   (and (>= x 0) (< x 24) (>= y 0) (< y 24) (> (aget hts (+ x (* y 24))) 0.0)))
 
 (defn- box-count-tall
   "Columns at least hmin tall within two tiles of (x, y)."
-  [x y hmin]
+  [x y ^double hmin]
   (loop [yy (max 0 (- y 2)) n 0]
     (if (> yy (min 23 (+ y 2)))
       n
@@ -159,7 +159,7 @@
    kept under a tile). If the tallest column could reach two tiles, columns
    that tall within two tiles also count; three never happens at these
    settings, and if it did, nothing would be clear."
-  [H]
+  [^double H]
   (let [D (aget P 10) hc (* D (aget P 8))
         ;; the camera's foot on the board plane: C_b = R^T (0 0 D)
         nx (+ 12.0 (* 0.5 D (aget P 6))) ny (+ 12.0 (* 0.5 D (aget P 7)))
@@ -185,7 +185,7 @@
 
 (defn- camera!
   "Set R, the inverse maps, the light and the sheen for tilt (qx, qy)."
-  [scr qx qy]
+  [scr ^double qx ^double qy]
   (let [a1 (* qx TILT-MAX) a2 (* qy TILT-MAX)
         c1 (math/cos a1) s1 (math/sin a1) c2 (math/cos a2) s2 (math/sin a2)
         R [c1 0.0 s1
@@ -498,7 +498,7 @@
 
 (defn- update-ring!
   "Advance the wobbles; true while any column still rings."
-  [dt]
+  [^double dt]
   (when (pos? @ringing)
     (let [n (loop [i 0 n 0]
               (if (< i w/N)

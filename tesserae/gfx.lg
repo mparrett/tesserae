@@ -175,7 +175,7 @@
 (defn cache-rect!
   "Re-sample the static layer into the world-pixel cache over the world box
    [x0,x1)x[y0,y1)."
-  [scr static-fn x0 y0 x1 y1]
+  [scr static-fn ^double x0 ^double y0 ^double x1 ^double y1]
   (let [k (:k scr) S (:S scr) wc (:wcache scr) kinv (/ 1.0 k)
         u0 (max 0 (int (math/floor (* x0 k)))) u1 (min S (int (math/ceil (* x1 k))))
         v0 (max 0 (int (math/floor (* y0 k)))) v1 (min S (int (math/ceil (* y1 k))))]
@@ -433,6 +433,32 @@
   (.append sb ESC) (.append sb "[48;2;") (.append sb (cr c)) (.append sb ";")
   (.append sb (cg c)) (.append sb ";") (.append sb (cb c)) (.append sb "m"))
 
+;; compose!'s per-pixel arithmetic, as fns of ^double/^long params: in
+;; AOT-lowered Go those are native, where the same code inline in compose!
+;; computes on boxed values (array reads, closure locals) and allocates per op.
+
+(defmacro ^:private K
+  "The value of constant var s, inlined as a literal."
+  [s]
+  @(ns-resolve 'tesserae.gfx s))
+
+(defn- rot-sample
+  "Static layer at screen pixel (x, y) through the rotation (c, s): the
+   cached world pixel under it, or outside."
+  [wc outside ^long x ^long y ^long S ^long k ^double kinv ^double c ^double s]
+  (let [X (- (* (+ x 0.5) kinv) (K HALFW)) Y (- (* (+ y 0.5) kinv) (K HALFW))
+        wx (+ (K HALFW) (+ (* c X) (* s Y))) wy (+ (K HALFW) (- (* c Y) (* s X)))]
+    (if (or (< wx 0.0) (>= wx (K WORLD)) (< wy 0.0) (>= wy (K WORLD)))
+      outside
+      (aget wc (+ (int (* wx k)) (* (int (* wy k)) S))))))
+
+(defn- post-add
+  "(post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))"
+  ^long [^long base ^double lr ^double lg ^double lb]
+  (bit-or (bit-or (bit-shift-left (post8 (+ (bit-and (bit-shift-right base 16) 255) lr)) 16)
+                  (bit-shift-left (post8 (+ (bit-and (bit-shift-right base 8) 255) lg)) 8))
+          (post8 (+ (bit-and base 255) lb))))
+
 (defn compose!
   "Diff and emit the arena into sb. static-fn: (wx wy) -> packed colour; only
    used for the outside colour here (the static layer comes from the cache).
@@ -462,17 +488,12 @@
                           (>= o 0) o
                           t3? (aget b3 i)
                           ident? (aget wc i)
-                          :else
-                          (let [X (- (* (+ x 0.5) kinv) HALFW) Y (- (* (+ y 0.5) kinv) HALFW)
-                                wx (+ HALFW (+ (* c X) (* s Y))) wy (+ HALFW (- (* c Y) (* s X)))]
-                            (if (or (< wx 0.0) (>= wx WORLD) (< wy 0.0) (>= wy WORLD))
-                              outside
-                              (aget wc (+ (int (* wx k)) (* (int (* wy k)) S))))))
+                          :else (rot-sample wc outside x y S k kinv c s))
                    lr (aget ar i) lg (aget ag i) lb (aget ab i)]
                (if (and (== lr 0.0) (== lg 0.0) (== lb 0.0))
                  base
                  (do (aset ar i 0.0) (aset ag i 0.0) (aset ab i 0.0)
-                     (post (+ (cr base) lr) (+ (cg base) lg) (+ (cb base) lb))))))
+                     (post-add base lr lg lb)))))
         coarse? @(:coarse scr)
         ;; loop state in int slots (lowers to native aget/aset under AOT):
         ;; 0 prev-top  1 fg  2 bg  3 last-i  4 emitted  5 dirty
