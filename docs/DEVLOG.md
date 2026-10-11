@@ -402,3 +402,17 @@ one conflict, in the ball draw call, and both sides were kept.
   19 ms (about 50 fps); idle 0.01 ms.
 - `lg-tesserae-aot` is now the full build; the old partial ones are kept as `-partial`.
   `AOT_SKIP` is only needed against a let-go older than #1051.
+
+## 2026-10-11: renderer unboxing brought to main
+
+- From the 3D spike's game-side unboxing (`spike/table3d-unbox` `c0567eb`, `71963c0`), only the
+  `gfx.lg` part comes to main: rotated sampling and light-add as `^double`/`^long`-param fns
+  (`rot-sample`, `post-add`), `post8` (posterize as a literal comparison tree equal to the LUT),
+  and float hints on `cache-rect!`, which used to fall back to bytecode under AOT. The 3D code,
+  `--t3d-fill` and the motion variants stay on the spike.
+- 2D output hash unchanged (3914128710 over 2.0 MB of frames, VM and AOT). Tests green.
+- Full AOT, ms, before → after: tile-cache rebuild 35–37 → 9–14 (level start and resize),
+  rotated full redraw 24–27 → 19–21. Coarse and idle frames are within noise.
+- Lowering gaps found along the way (typed-array `aget`, `(double x)`/`(long x)` casts, re-boxed
+  sibling results, `(let [^double x …])` falling back) are a data point for let-go#358; a draft
+  comment is waiting.
