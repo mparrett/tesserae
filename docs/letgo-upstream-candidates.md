@@ -90,9 +90,26 @@ of their own.
   is required: the same `let` without `dotimes` compiles. Destructuring, a sibling fn escaping
   into a closure, or a closure over a param make no difference. Same symptom family as #260
   (a materialised var load nothing reads), different trigger.
-- **Unfiled (2026-10-11): lowered `fibre!` (Glass Box) runs ~15× slower than its bytecode**
-  (100 ms vs 6.5 ms per 12 edges; allocation and boxed `NumMul`). The build leaves it on
-  the VM (`AOT_SKIP=fibre!`). Not yet reduced.
+- **Unfiled (2026-10-12): a `let` that shadows a loop-invariant local is coalesced onto the
+  same Go variable and overwrites it.** Found as lowered `fibre!` (Glass Box) running ~15×
+  slower than bytecode on the AOT branch; on stock upstream `1fc01c65` with `lg compile`, it
+  never returns for one 70 px line. Cause: `plot`'s `x#` and `dotimes`'s bound are both
+  `__G__0` (the reader's auto-gensym counter restarts at 0 per syntax-quote), and
+  `coalesce-map` merges them, so every pixel resets the `dotimes` bound. Plain code hits it
+  too:
+  ```clojure
+  (defn f [n]
+    (let [b (long n)]
+      (loop [j 0]
+        (if (and (< j b) (< j 100))
+          (do (let [b (long (+ n j))] (when (neg? b) (println b)))
+              (recur (inc j)))
+          j))))
+  ```
+  → VM `(f 3)` = 3, compiled 100. `oos-unsafe-names` checks only same-inst reads and
+  edge copies; a loop-invariant value read by the header across the back edge escapes both.
+  Needs matching Go types (an `int64` inner `b` gets its own local). The build still skips
+  `fibre!` (`AOT_SKIP=fibre!`); renaming `plot`'s gensyms by hand would also avoid it.
 - **Observation:** the lowerer guesses `:int` for params used in arithmetic, so float params
   need `^double` hints. Without them, `sample`'s params became int64.
 - Inside lowered code, `.append` on a StringBuilder goes through reflection on every call, and
