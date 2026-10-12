@@ -73,6 +73,26 @@ of their own.
     #1051 the fix with tests.
   - Minor, uncaused: typeinfer time per drain rises about 1.8× over a 13× size range (a small
     #558-class effect, about 7 s of the hour).
+- **Unfiled (2026-10-12): a lifted local fn in a function with a loop leaves a dead Go local,
+  so `go build` fails.** Hit by Glass Box's first `mat-rot!` (`declared and not used: nrm`),
+  which was rewritten as plain arithmetic. Reproduces on stock upstream `1fc01c65` with
+  `lg compile`, no game code:
+  ```clojure
+  (ns nrm-repro)
+  (defn f [p a]
+    (let [g (fn [v] (inc v))
+          x (g p)]
+      (dotimes [i 3] (aset a i x))))
+  (defn -main [& _] (let [a (object-array 3)] (f 1 a) (println (vec a))))
+  ```
+  → `nrm_repro.go:11:6: declared and not used: g`. The fn is lifted to `f__lifted0` and the
+  call becomes a direct call, but `g = ec.Deref(<var f__lifted0>)` is still emitted. The loop
+  is required: the same `let` without `dotimes` compiles. Destructuring, a sibling fn escaping
+  into a closure, or a closure over a param make no difference. Same symptom family as #260
+  (a materialised var load nothing reads), different trigger.
+- **Unfiled (2026-10-11): lowered `fibre!` (Glass Box) runs ~15× slower than its bytecode**
+  (100 ms vs 6.5 ms per 12 edges; allocation and boxed `NumMul`). The build leaves it on
+  the VM (`AOT_SKIP=fibre!`). Not yet reduced.
 - **Observation:** the lowerer guesses `:int` for params used in arithmetic, so float params
   need `^double` hints. Without them, `sample`'s params became int64.
 - Inside lowered code, `.append` on a StringBuilder goes through reflection on every call, and
