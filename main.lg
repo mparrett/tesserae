@@ -19,6 +19,7 @@
             "--stats" (recur (rest as) (assoc o :hud-stats true))
             "--all" (recur (rest as) (assoc o :all true))                   ; unlock every level
             "--mute" (recur (rest as) (assoc o :mute true))                 ; no sound even when the runtime has it
+            "--music-gain" (recur (drop 2 as) (assoc o :music-gain (parse-double b)))   ; 0..1, the bed under the sfx
             "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
             ;; the level editor: --edit [file.edn]; play a custom map: --map file.edn
             "--edit" (if (and b (not (clojure.string/starts-with? b "--")))
