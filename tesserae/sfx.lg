@@ -1,0 +1,108 @@
+(ns tesserae.sfx
+  "Ambience and one-shots through undertone's `audio` namespace, when the
+   runtime links it (audio-host/lg, run by tools/play-audio.sh). On a stock
+   lg there is no `audio` namespace, every call here is a no-op, and the game,
+   the tests, the sims and the browser build run exactly as before.
+
+   Write-only, like undertone's own surface: nothing here returns a value the
+   game could branch on, so autoplay and replays stay deterministic.
+
+   The score comes from undertone's `ambience/derive-mood`, required at
+   runtime only when audio exists (its source lives in undertone, on the
+   -source-paths that play-audio.sh passes).")
+
+(defn- native [sym] (when-let [v (resolve sym)] @v))
+
+(def ^:private trigger* (native 'audio/trigger))
+
+(def on? (atom false))
+(def ^:private quiet? (atom true))     ; the title's attract demo plays no sfx
+(def ^:private score-state (atom nil)) ; [mood seed level tension]
+(def ^:private last-ms (atom {}))      ; shot name -> ms it last fired
+
+(defn- now-ms [] (quot (System/nanoTime) 1000000))
+
+;; Chapter themes -> undertone moods. Seeded by level index, so a level keeps
+;; its music across retries.
+(def ^:private theme-mood
+  {:indigo :aurora :teal :meadow :umber :village :felt :overworld
+   :violet :aurora :crimson :dungeon :grout :dungeon :orrery :overworld})
+
+(defn- push-score! []
+  (when-let [[mood seed level tension] @score-state]
+    ((native 'audio/set-parameters)
+     ((native 'ambience/derive-mood) mood seed level tension))))
+
+(defn start!
+  "Begin the music bed. o is the game's option map; :mute keeps it all off."
+  [o]
+  (when (and trigger* (not (:mute o)))
+    (require 'ambience)
+    (reset! on? true)
+    (reset! score-state [:aurora 1 0 0.0])
+    (push-score!)
+    ((native 'audio/music-start))))
+
+(defn stop! []
+  (when @on?
+    ((native 'audio/music-stop))
+    (reset! on? false)))
+
+(defn level!
+  "A level is loading: li < 0 is the title. Takes effect at the next pattern
+   boundary, which undertone turns into a seamless transition."
+  [li theme boss?]
+  (when @on?
+    (reset! quiet? (neg? li))
+    (reset! score-state (if (neg? li)
+                          [:aurora 1 0 0.0]
+                          [(get theme-mood theme :aurora) (inc li) (quot li 3) (if boss? 0.6 0.1)]))
+    (push-score!)))
+
+(defn tension!
+  "Raise or ease the current level's tension (0..1), e.g. on the last spark."
+  [t]
+  (when (and @on? @score-state (not= t (nth @score-state 3)))
+    (swap! score-state assoc 3 t)
+    (push-score!)))
+
+(defn- shot!
+  "Fire one trigger map, dropping repeats of the same shot inside gap ms so a
+   cascade of hits in one physics frame doesn't flood the 8-voice pool."
+  [m gap]
+  (when (and @on? (not @quiet?))
+    (let [k (:shot m) t (now-ms)]
+      (when (>= (- t (get @last-ms k -100000)) gap)
+        (swap! last-ms assoc k t)
+        (trigger* m)))))
+
+(defn- pan [wx] (max 0.0 (min 1.0 (/ (double wx) 48.0))))
+
+;; ---- the game's vocabulary: what happened, never how it sounds ----
+
+(defn tile-broken!
+  "Each break in a combo climbs the scale, so a long rally plays a phrase."
+  [combo wx]
+  (shot! {:shot :tink :degree (min 14 combo) :octave 0 :gain 0.5 :pan (pan wx)} 25))
+
+(defn tile-cracked! [wx] (shot! {:shot :hit :gain 0.3 :pan (pan wx)} 40))
+
+(defn wall-struck! [wx] (shot! {:shot :thunk :gain 0.18 :pan (pan wx)} 70))
+
+(defn trowel-bounced! [px] (shot! {:shot :blip :degree 0 :octave -1 :gain 0.45 :pan (pan px)} 30))
+
+(defn launched! [] (shot! {:shot :zap :degree 4 :octave 0 :gain 0.4} 60))
+
+(defn spark-lost! [] (shot! {:shot :fall :degree 0 :octave 0 :gain 0.55} 200))
+
+(defn game-over! []
+  (shot! {:shot :fall :degree 0 :octave -1 :gain 0.6} 0)
+  (shot! {:shot :thud :gain 0.6 :delay-ms 450} 0))
+
+(defn level-won!
+  "A rising arpeggio in the level's key, timed by the engine (delay-ms), not
+   by the frame loop."
+  []
+  (when (and @on? (not @quiet?))
+    (trigger* (vec (map-indexed (fn [i d] {:shot :tink :degree d :octave 0 :gain 0.55 :delay-ms (* 110 i)})
+                                [0 2 4 7])))))
