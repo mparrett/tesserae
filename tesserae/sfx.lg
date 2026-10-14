@@ -9,11 +9,29 @@
 
    The score comes from undertone's `ambience/derive-mood`, required at
    runtime only when audio exists (its source lives in undertone, on the
-   -source-paths that play-audio.sh passes).")
+   -source-paths that play-audio.sh passes).
+
+   In the browser the game runs in a Web Worker, which can't open audio, so
+   the same commands go to the page as EDN over js/emit, where undertone's
+   bridge (cmd/undertone-bridge, added by tools/build-web-audio.sh) plays
+   them. Without the bridge on the page the events have no listener."
+  (:require [js]))
 
 (defn- native [sym] (when-let [v (resolve sym)] @v))
 
-(def ^:private trigger* (native 'audio/trigger))
+;; :native when this lg links undertone, :bridge in a browser bundle, else nil.
+(def ^:private backend
+  (cond (native 'audio/trigger) :native
+        *in-wasm* :bridge
+        :else nil))
+
+(defn- emit! [cmd] (js/emit "undertone" {:form (pr-str cmd)}))
+
+(defn- trigger* [m]
+  (case backend
+    :native ((native 'audio/trigger) m)
+    :bridge (emit! [:trigger m])
+    nil))
 
 (def on? (atom false))
 
@@ -33,24 +51,30 @@
    :violet :aurora :crimson :dungeon :grout :dungeon :orrery :overworld})
 
 (defn- push-score! []
-  (when-let [[mood seed level tension] @score-state]
-    ((native 'audio/set-parameters)
-     ((native 'ambience/derive-mood) mood seed level tension))))
+  (when-let [[mood seed level tension :as sc] @score-state]
+    (case backend
+      :native ((native 'audio/set-parameters)
+               ((native 'ambience/derive-mood) mood seed level tension))
+      :bridge (emit! (into [:score] sc))
+      nil)))
 
 (defn start!
   "Begin the music bed. o is the game's option map; :mute keeps it all off."
   [o]
-  (when (and trigger* (not (:mute o)))
-    (require 'ambience)
+  (when (and backend (not (:mute o)))
     (reset! on? true)
-    ((native 'audio/set-music-gain) (double (get o :music-gain MUSIC-GAIN)))
+    (let [g (double (get o :music-gain MUSIC-GAIN))]
+      (case backend
+        :native (do (require 'ambience) ((native 'audio/set-music-gain) g))
+        :bridge (emit! [:music-gain g])))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
-    ((native 'audio/music-start))))
+    ;; the bridge opens its own device at page load and starts on a gesture
+    (when (= backend :native) ((native 'audio/music-start)))))
 
 (defn stop! []
   (when @on?
-    ((native 'audio/music-stop))
+    (when (= backend :native) ((native 'audio/music-stop)))
     (reset! on? false)))
 
 (defn level!

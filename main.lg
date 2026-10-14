@@ -38,7 +38,7 @@
           [["level" true] ["fps" true] ["seconds" true] ["glyphs" true]
            ["paddle-speed" true] ["paddle-accel" true] ["mouse-gain" true]
            ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
-           ["reset-progress" false]]))
+           ["reset-progress" false] ["mute" false] ["music-gain" true]]))
 
 (defn fail! [msg]
   (println (str "tesserae: " msg))
