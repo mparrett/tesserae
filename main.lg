@@ -12,6 +12,10 @@
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))
             "--seconds" (recur (drop 2 as) (assoc o :seconds (parse-double b)))
             "--glyphs" (recur (drop 2 as) (assoc o :glyphs (keyword b)))   ; quadrant|sextant|off
+            ;; trowel feel, for playtesting (defaults in tesserae.game)
+            "--paddle-speed" (recur (drop 2 as) (assoc o :paddle-speed (parse-double b)))
+            "--paddle-accel" (recur (drop 2 as) (assoc o :paddle-accel (parse-double b)))
+            "--mouse-gain" (recur (drop 2 as) (assoc o :mouse-gain (parse-double b)))
             "--stats" (recur (rest as) (assoc o :hud-stats true))
             "--all" (recur (rest as) (assoc o :all true))                   ; unlock every level
             "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
@@ -30,6 +34,7 @@
             (when-let [v (js/url-param p)]
               (if takes-val? [(str "--" p) v] [(str "--" p)])))
           [["level" true] ["fps" true] ["seconds" true] ["glyphs" true]
+           ["paddle-speed" true] ["paddle-accel" true] ["mouse-gain" true]
            ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
            ["reset-progress" false]]))
 

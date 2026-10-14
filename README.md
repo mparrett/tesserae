@@ -35,6 +35,7 @@
 ./play.sh --level 3             # start at level 3 (with its story card)
 ./play.sh --level 3 --skip-card --autoplay --stats   # watch the autopilot, show fps/bytes
 ./play.sh --glyphs sextant      # ball silhouettes: quadrant (default) | sextant | off
+./play.sh --paddle-accel 40     # trowel feel: --paddle-speed (62), --paddle-accel (22), --mouse-gain (14)
 ./play.sh --all                 # unlock every level on the title screen (testing)
 ./play.sh --reset-progress      # forget saved scores, medals and unlocks
 LG=/path/to/lg ./play.sh        # use another let-go binary
