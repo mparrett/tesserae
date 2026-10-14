@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>3D table motion variants</title>
+<style>body{background:#0b0d1f;color:#e6e8f4;font:15px system-ui,sans-serif;margin:24px}
+h1{font-size:20px}h2{font-size:15px;margin:18px 0 6px}.g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+img{width:100%;image-rendering:pixelated;border:1px solid #2a2e52}p{color:#9aa0c2;margin:4px 0}</style>
+<h1>3D table: motion variants (spike/table3d, 2ebe64e)</h1>
+<h2>Synchronized 2×2 (same frames, board only)</h2>
+<img src="captures/spike-3d-variant-grid.gif" style="max-width:900px">
+<h2>Same mid-sweep frame</h2>
+<img src="captures/spike-3d-variant-grid.png" style="max-width:900px">
+<h2>In game (AOT, --t3d-sweep; not frame-locked)</h2>
+<div class="g">
+<div><img src="captures/spike-3d-variant-baseline.gif"><p>baseline · ~19 ms/frame</p></div>
+<div><img src="captures/spike-3d-variant-full-rows.gif"><p>1 --t3d-full-rows · ~29 ms</p></div>
+<div><img src="captures/spike-3d-variant-cell.gif"><p>2 --t3d-cell · ~31 ms</p></div>
+<div><img src="captures/spike-3d-variant-detent.gif"><p>3 --t3d-detent · 8–14 fps in play</p></div>
+</div>
