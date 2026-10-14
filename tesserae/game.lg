@@ -11,6 +11,7 @@
             [tesserae.input :as in]
             [tesserae.levels :as L]
             [tesserae.meta :as M]
+            [tesserae.sfx :as sfx]
             [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -195,6 +196,7 @@
         mult (+ 1.0 (* 0.5 (quot combo 5)))
         brk (fn [pts]
               (w/clear! i)
+              (sfx/tile-broken! combo cx)
               (swap! S update :combo inc)
               (let [p (int (* pts mult))]
                 (add-score! p)
@@ -211,7 +213,7 @@
 
       (or (= t w/HARD) (= t w/MAGNET))
       (if (> (aget w/thits i) 1)
-        (do (w/crack! i) (burst! cx cy c 4 8.0) nil)
+        (do (w/crack! i) (sfx/tile-cracked! cx) (burst! cx cy c 4 8.0) nil)
         (do (brk 25) nil))
 
       (= t w/LAMP)
@@ -231,11 +233,13 @@
           (w/set-ghost! j)
           (let [[x y] (w/tile-center j)] (burst! x y (aget w/tbase j) 6 10.0)))
         (add-score! (* 15 (count mates)))
+        (sfx/tile-broken! combo cx)
         (swap! S assoc :goal-dirty true)
         (piece-done! i piece #{w/GHOST} "LAID" 120)
         nil)
 
       :else (do (burst! cx cy 0x8090a0 2 6.0)
+                (sfx/wall-struck! cx)
                 (when (and (lv :ward) (= t w/WALL)) (swap! S assoc :combo 0))
                 nil))))
 
@@ -325,6 +329,7 @@
                        [wx wy] (gfx/s->w sc sx (if (neg? dir) (- surface BR) (+ surface BR)))
                        [wvx wvy] (gfx/rot-vec sc nvx nvy -1)]
                    (swap! S assoc :combo 0)
+                   (sfx/trowel-bounced! px)
                    (if (and mag? (neg? dir))
                      (assoc b :x wx :y wy :vx 0.0 :vy 0.0 :stuck (- sx px))
                      (let [nb (assoc b :x wx :y wy :vx wvx :vy wvy)]
@@ -519,6 +524,7 @@
             :lodes (lodestones)
             ;; meta layer: per-level bookkeeping
             :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
+    (sfx/level! li (:theme l) (boolean (:core l)))
     (when (:core l) (boss-init! l))
     (when (:well l) (well-init!))
     (when (:orrery l) (orrery-init! l))
@@ -1493,8 +1499,11 @@
   (let [st (swap! S update :lives dec)]
     (if (<= (:lives st) 0)
       (do (swap! S assoc :mode :over :mode-t 0.0)
+          (sfx/game-over!)
           (banner! "THE GROUT SETTLES" 0xff6070 99.0))
       (do (banner! (if (lv :tilt) "MARBLE LOST" "SPARK LOST") 0xff7080 1.4)
+          (sfx/spark-lost!)
+          (when (= 1 (:lives st)) (sfx/tension! 0.5))
           (swap! S assoc :combo 0)
           (if (lv :tilt)
             (swap! S assoc :tilt [0.0 0.0] :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
@@ -1505,6 +1514,7 @@
   (let [secs (:time @S)
         bonus (+ 500 (max 0 (int (- 1500 (* 10 secs)))))]
     (add-score! bonus)
+    (sfx/level-won!)
     (release-ward!)
     (swap! S assoc :mode :clear :mode-t 0.0 :clear-bonus bonus
            :dest nil :swirl nil :swirl-warn nil :stun 0.0)
@@ -1553,6 +1563,7 @@
                    bs)))))
 
 (defn launch! []
+  (when (some :stuck (:balls @S)) (sfx/launched!))
   (let [sc @scr]
     (swap! S update :balls
            (fn [bs]
@@ -2347,6 +2358,7 @@
   (term/hide-cursor)
   (term/write (str gfx/ESC "[?7l"))
   (in/start!)
+  (sfx/start! o)
   (try
     (clear-screen!)
     (cond
@@ -2374,6 +2386,7 @@
           (when-not (or @quit? (and stop-at (> (System/nanoTime) stop-at)))
             (recur t0)))))
     (finally
+      (sfx/stop!)
       (in/stop!)
       (term/write (str gfx/ESC "[0m" gfx/ESC "[?7h" gfx/ESC "[?2026l"))
       (term/show-cursor)
