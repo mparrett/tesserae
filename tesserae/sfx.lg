@@ -16,6 +16,10 @@
 (def ^:private trigger* (native 'audio/trigger))
 
 (def on? (atom false))
+
+;; The bed sits well under the one-shots by default: the sfx are the game's
+;; feedback, the music is room tone. --music-gain overrides (0..1).
+(def MUSIC-GAIN 0.3)
 (def ^:private quiet? (atom true))     ; the title's attract demo plays no sfx
 (def ^:private score-state (atom nil)) ; [mood seed level tension]
 (def ^:private last-ms (atom {}))      ; shot name -> ms it last fired
@@ -39,6 +43,7 @@
   (when (and trigger* (not (:mute o)))
     (require 'ambience)
     (reset! on? true)
+    ((native 'audio/set-music-gain) (double (get o :music-gain MUSIC-GAIN)))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ((native 'audio/music-start))))
