@@ -202,11 +202,12 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
   apart from xterm.js, which loads from jsDelivr. The shell is `web/shell.html`, an
   `-w-shell` template that picks the largest font that fits the game's 76x24 layout, so
   it looks as it does in a terminal at k=1, and uses xterm's WebGL renderer.
-- The terminal font is bundled in the shell: Cascadia Mono, with DejaVu Sans Mono for
-  the few symbols Cascadia lacks, so every platform gets the same cell and the sextant
-  glyphs. The shell pads the cell so it's exactly twice as tall as wide, keeping the
-  raster's pixels square. `?font=system` uses the platform mono instead.
-  `tools/gen-terminal-font.py` regenerates the font from what the game draws.
+- The terminal font, DejaVu Sans Mono, is bundled in the shell, so every platform gets
+  the same look (it has no sextants, so `glyphs=sextant` uses the platform's fonts). The
+  generator can bundle Cascadia Mono instead, which has them. The shell pads the cell so
+  it's exactly twice as tall as wide, keeping the raster's pixels square. `?font=system`
+  uses the platform mono instead. `tools/gen-terminal-font.py` regenerates the font from
+  what the game draws.
 - The page must be served cross-origin isolated (COOP/COEP headers). Otherwise the first
   key read fails with "no SharedArrayBuffer". `tools/coi-serve.py` does this;
   `python -m http.server` does not.

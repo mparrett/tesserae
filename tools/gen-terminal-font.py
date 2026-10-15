@@ -6,13 +6,16 @@ raster assumes a cell is two square pixels stacked (width/height 0.5), and
 ball sprites in `--glyphs sextant` need U+1FB00-1FB3B, which xterm doesn't
 draw itself (it does draw the quadrant blocks, via customGlyphs). Left to the
 platform, macOS gets Menlo (no sextants) and other systems something else, so
-the page looks different everywhere. Bundling one face fixes both.
+the page looks different everywhere. Bundling a face fixes the first; the
+shell's squareCells() fixes the cell, whatever the font.
 
-Primary face: Cascadia Mono, the free mono closest to a 0.5 cell (0.504) with
-the full sextant block. It lacks a few UI symbols (↻ ⊘ ✎ ✦ ✶), so a second
-face subset from DejaVu Sans Mono covers exactly those. With the WebGL renderer
-each glyph is drawn into its own cell, so the second face can't drift the grid
-(xsofy saw drift mixing faces under the DOM renderer).
+Default face: DejaVu Sans Mono, chosen by eye (2026-10-14) over Cascadia Mono
+and Fairfax HD in an A/B of the k=1 layout. It has every UI symbol but no
+sextants, so --glyphs sextant falls back to the platform's fonts in the
+browser. --primary cascadia has the full sextant block and takes its few
+missing UI symbols (↻ ⊘ ✎ ✦ ✶) from a second, DejaVu face; with the WebGL
+renderer each glyph is drawn into its own cell, so that second face can't
+drift the grid (xsofy saw drift mixing faces under the DOM renderer).
 
 The subset is derived from what the game renders, so it can't go stale: every
 non-ASCII literal in main.lg, tesserae/**/*.lg and levels/**, plus printable
@@ -20,8 +23,9 @@ ASCII and the full quadrant and sextant ranges (gfx.lg builds those glyphs from
 code points, not literals). A glyph neither face has is an error, except
 sextants, which only warn (DejaVu has none, for --primary dejavu).
 
-Both faces are renamed "Tess Mono" / "Tess Mono Fallback": Cascadia's OFL
-reserves the name "Cascadia Code", and a subset is a modified version.
+Faces are renamed "Tess Mono" / "Tess Mono Fallback": Cascadia's OFL reserves
+the name "Cascadia Code", a subset is a modified version, and one family name
+keeps the shell independent of the choice.
 
 Sources aren't vendored: they're downloaded from pinned releases, checksum-
 verified, and cached in tools/fonts/.cache/ (gitignored). The committed
@@ -117,7 +121,7 @@ def face(family: str, woff2: bytes) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--primary", choices=sorted(SOURCES), default="cascadia")
+    ap.add_argument("--primary", choices=sorted(SOURCES), default="dejavu")
     ap.add_argument("--shell", type=pathlib.Path, default=ROOT / "web" / "shell.html")
     a = ap.parse_args()
 

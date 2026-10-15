@@ -486,3 +486,7 @@ one conflict, in the ball draw call, and both sides were kept.
   panel text, and half the frame rate. `?grid=large` keeps that layout; `?grid=small` is gone,
   since it's now the default. The font-size search now starts at 64px, not 28, so k=1 fills a
   large window.
+- **decision (user): DejaVu Sans Mono for now.** In an A/B of the padded k=1 page (Cascadia,
+  DejaVu, Fairfax HD) DejaVu looked best, though the choice isn't final. It has no sextants, so
+  `glyphs=sextant` in the browser uses the platform's fonts. The user noted that everything
+  looks bold at these sizes; not yet investigated.
