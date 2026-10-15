@@ -477,3 +477,12 @@ one conflict, in the ball draw call, and both sides were kept.
   xterm internals (`_renderService.dimensions`), and is skipped if they move.
 - The shell loads both faces before `term.open`: xterm measures the cell there, and the WebGL
   renderer caches each glyph the first time it draws it.
+
+## 2026-10-14: the browser build defaults to k=1
+
+- **decision (user):** the web shell picks the largest font that fits the 76×24 layout, so the
+  arena and the side panel keep the proportions they have in a terminal. Since the v2 browser
+  build it had shrunk the font to reach 124×50, pushing the game to k=2: a huge arena, tiny
+  panel text, and half the frame rate. `?grid=large` keeps that layout; `?grid=small` is gone,
+  since it's now the default. The font-size search now starts at 64px, not 28, so k=1 fills a
+  large window.

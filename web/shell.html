@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>TESSERAE</title>
-  <!-- lg -w -w-shell template: let-go's default xterm shell, plus a font size
-       picked so the grid reaches 124x50 (the doubled raster) when the window
-       allows it, and the WebGL renderer (the DOM renderer can't keep up with a
+  <!-- lg -w -w-shell template: let-go's default xterm shell, plus the largest
+       font that fits the game's 76x24 layout (k=1, as in a terminal), and the
+       WebGL renderer (the DOM renderer can't keep up with a
        full-screen truecolor raster). The terminal font is bundled (below). -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <style>
@@ -57,10 +57,11 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
-  // Largest font that still gives the game its doubled raster (124x50);
-  // failing that, the largest that gives the minimum arena (76x24).
-  // ?grid=small skips the doubled raster: a quarter of the pixels per frame.
-  const small = new URLSearchParams(location.search).get('grid') === 'small';
+  // Largest font that fits the game's k=1 layout (76x24), so the arena and the
+  // side panel keep the proportions they have in a terminal. ?grid=large asks
+  // for the doubled raster (124x50, k=2) instead: finer rotation and motion,
+  // tiny panel text, four times the pixels per frame.
+  const large = new URLSearchParams(location.search).get('grid') === 'large';
   // The raster's pixels are square only if a cell is exactly half as wide as
   // it is tall, in device pixels. Fonts and xterm's whole-pixel rounding rarely
   // give that (Cascadia at 15px is 8x18), so pad or tighten the cell with
@@ -72,12 +73,12 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   }
   function pickFont() {
     let fallback = null;
-    for (let fs = 28; fs >= 7; fs--) {
+    for (let fs = 64; fs >= 7; fs--) {
       term.options.fontSize = fs;
       squareCells();
       const d = fit.proposeDimensions();
       if (!d) continue;
-      if (!small && d.cols >= 124 && d.rows >= 50 && fs >= 9) return fs;
+      if (large && d.cols >= 124 && d.rows >= 50 && fs >= 9) return fs;
       if (fallback === null && d.cols >= 76 && d.rows >= 24) fallback = fs;
     }
     return fallback || 10;

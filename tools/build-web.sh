@@ -4,7 +4,7 @@
 # with the program wasm inlined (gzip+base64) and a COI service worker.
 #
 # The page uses web/shell.html (an -w-shell template: xterm.js from jsDelivr,
-# a font size picked for a 124x50 grid, WebGL renderer). Serving it needs
+# the largest font that fits the 76x24 layout, WebGL renderer). Serving it needs
 # cross-origin isolation (COOP/COEP); see tools/serve-web.sh.
 #
 # lg -w compiles main.lg and its tesserae/* namespaces to bytecode, then runs
