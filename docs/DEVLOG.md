@@ -458,3 +458,22 @@ one conflict, in the ball draw call, and both sides were kept.
   `dev` build falls back to the stale `3p/let-go` clone. The native sim ran about 1.65× faster
   than on a13e (measured 2026-10-17); web fps was inconclusive. `lg-a13e042791` is kept.
 - `tools/heavy.sh` falls back to macOS `lockf(1)` when `flock` is missing.
+
+## 2026-10-14: a bundled terminal font for the browser build
+
+- **decision: Cascadia Mono, with DejaVu Sans Mono for ↻ ⊘ ✎ ✦ ✶.** The shell used to ask for
+  DejaVu Sans Mono, which macOS doesn't have, so the page fell back to Menlo there and looked
+  different on every OS. Of the free monos checked (Cascadia, DejaVu, JetBrains, Inconsolata,
+  Space Mono, and xsofy's Fairfax HD), Cascadia is the only regular-looking one with the full
+  sextant block and a cell close to 0.5 wide/high (0.504). xterm draws the quadrant blocks
+  itself (customGlyphs) but not sextants, even in 6.0.0. Fairfax HD covers everything at
+  exactly 0.5 but is a pixel face. Cubio Mono and Akkurat Mono are commercial.
+- `tools/gen-terminal-font.py` follows xsofy's: pinned, checksummed downloads, a subset of
+  what the game draws, inlined as woff2 (about 23 KB). The faces are renamed "Tess Mono"
+  because Cascadia's licence reserves its name.
+- **surprise:** the font alone didn't give square pixels. xterm rounds the cell to whole
+  device pixels, so Cascadia at 15px came out 8×18 (0.444). The shell now sets `letterSpacing`
+  so the cell is exactly half as wide as tall in device pixels, whatever the font. That needs
+  xterm internals (`_renderService.dimensions`), and is skipped if they move.
+- The shell loads both faces before `term.open`: xterm measures the cell there, and the WebGL
+  renderer caches each glyph the first time it draws it.
