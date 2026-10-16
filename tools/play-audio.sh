@@ -12,5 +12,5 @@ if [[ ! -x "$host" || -n "${REBUILD:-}" ]]; then
   echo "building audio-host/lg ..." >&2
   (cd "$here/audio-host" && go build -o lg .)
 fi
-undertone="$(cd "$here/audio-host" && go list -m -f '{{.Dir}}' github.com/mparrett/let-go-undertone)"
+undertone="$(cd "$here/audio-host" && go list -m -f '{{.Dir}}' github.com/mparrett/undertone)"
 LG="$host" TESS_SOURCE_PATHS=".:$undertone/letgo/lg" exec "$here/play.sh" "$@"

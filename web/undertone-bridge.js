@@ -1,5 +1,5 @@
 // Spike: boots undertone's page bridge (cmd/undertone-bridge in
-// let-go-undertone) beside the game. The game runs in a Web Worker and sends
+// undertone) beside the game. The game runs in a Web Worker and sends
 // audio commands with js/emit; the bridge plays them on this thread, where an
 // AudioContext exists. Added to the page by tools/build-web-audio.sh.
 //
