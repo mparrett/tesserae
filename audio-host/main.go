@@ -8,7 +8,7 @@ import (
 
 	"github.com/nooga/let-go/pkg/cli"
 
-	"github.com/mparrett/let-go-undertone/letgo"
+	"github.com/mparrett/undertone/letgo"
 )
 
 var version, commit = "dev", "a13e042+undertone"
