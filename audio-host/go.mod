@@ -2,12 +2,8 @@ module tesserae/audiohost
 
 go 1.27
 
-// Spike: undertone comes from a local worktree with the arcade shots; drop
-// the replace once they land upstream.
-replace github.com/mparrett/let-go-undertone => ../../let-go-undertone-tesserae-sfx
-
 require (
-	github.com/mparrett/let-go-undertone v0.0.0-20261012230501-54dcaefe21f8
+	github.com/mparrett/let-go-undertone v0.1.0
 	github.com/nooga/let-go v1.13.1-0.20261009071543-a13e04279138
 )
 
