@@ -1,0 +1,61 @@
+# One-VM browser audio: spike notes
+
+The shipped spike (`tools/build-web-audio.sh`) uses two VMs: the game in a
+worker sends EDN commands, and a second wasm on the page plays them
+([two-vm-bridge.html](two-vm-bridge.html)). This note records how the one-VM
+version was built and what it measured, so it can be rebuilt once its pieces
+are upstream.
+
+## Shape
+
+The game's own wasm links undertone. Undertone renders in the worker into a
+`SharedArrayBuffer` ring and posts it to the page as `undertone:open`; a small
+`page.js` on the main thread owns the `AudioContext` and the worklet that
+reads the ring. No second runtime, no EDN hop.
+
+## Pieces and where they stand (as of 2026-10-17)
+
+- **let-go `-import`** (#1037, merged): `lg -w -w-module DIR -import PKG` links
+  a Go package into the bundle.
+- **let-go `RegisterEmbeddedSource`** (#1064, merged as 8673d88a): undertone
+  can ship `ambience` inside the Go package, so it resolves with no source path.
+- **undertone registers `ambience`** as `undertone.ambience` (undertone#29, in
+  review). Tesserae's `sfx.lg` must then require `undertone.ambience`.
+- **undertone worker mode** (not upstream): `webaudio/worker.go` and
+  `webaudio/page.js` in the `let-go-undertone-register-ambience` worktree,
+  branch `spike/register-ambience`. `Open` detects a worker and posts the ring
+  instead of opening a context. `page.js` wraps `window.Worker` to hear those
+  messages, so it must load before let-go's runtime script. Needs the module
+  rename and the handle caching from undertone#13 before it can be a PR.
+
+## Build recipe used
+
+```sh
+# H: a Go module whose main is audio-host's (cli.Main + undertone/letgo),
+#    with go.mod pointing at let-go >= 8673d88a and the worker-mode undertone.
+sed 's|<head>|<head>\n  <script src="undertone-page.js"></script>|' web/shell.html > /tmp/shell.html
+"$H/lg" -w OUT -w-shell /tmp/shell.html -w-module "$H" \
+  -import github.com/mparrett/undertone/letgo \
+  -storage-id tesserae-onevm -source-paths . main.lg
+cp "$UNDERTONE/webaudio/page.js" OUT/undertone-page.js
+```
+
+Serve OUT with `tools/coi-serve.py` (the ring needs cross-origin isolation).
+
+## Measured (2026-10-15, headless Chromium, `tools/audio-probe.py`)
+
+- During autoplay the queue held 264–311 ms of its 300 ms target with no new
+  underruns, and the stats overlay showed the 50 fps cap with sound and with
+  `&mute`.
+- At startup, 148–189 underrun quanta (about half a second) before the ring
+  filled. Cause not investigated.
+- A `BroadcastChannel` can't carry the ring: Chrome delivers a
+  `SharedArrayBuffer` sent that way as `null`. Worker `postMessage` shares it.
+- Not yet heard by ear, nor tried in Safari or on iOS.
+
+## TinyGo, for comparison
+
+TinyGo can't build this path yet: let-go's `-w-module` refuses
+`LETGO_USE_TINYGO`. It does build the two-VM bridge (1.8 MB gzipped against
+6.5 MB for Go, 2026-10-15), which plays after undertone#13 but still shows GC
+pauses of 200–300 ms in a 20 s run, against under 100 ms for Go.
