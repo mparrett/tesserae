@@ -55,7 +55,22 @@ Serve OUT with `tools/coi-serve.py` (the ring needs cross-origin isolation).
 
 ## TinyGo, for comparison
 
-TinyGo can't build this path yet: let-go's `-w-module` refuses
-`LETGO_USE_TINYGO`. It does build the two-VM bridge (1.8 MB gzipped against
-6.5 MB for Go, 2026-10-15), which plays after undertone#13 but still shows GC
+As of 2026-10-15 TinyGo couldn't build this path: let-go's `-w-module`
+refused `LETGO_USE_TINYGO`. It did build the two-VM bridge (1.8 MB gzipped against
+6.5 MB for Go, 2026-10-15), which plays after undertone#13 but still showed GC
 pauses of 200–300 ms in a 20 s run, against under 100 ms for Go.
+
+With nooga/let-go#1077 (TinyGo under `-w-module`), #1079/#1080 (storage in
+the worker) and undertone#45 (worker mode), TinyGo builds the one-VM path at
+2.6 MB. A first phone ear test on 2026-10-18, one short listen per build,
+compared three builds:
+
+| Build | Result |
+| --- | --- |
+| Go one-VM | hitches |
+| TinyGo two-VM bridge | hitches |
+| TinyGo one-VM | no hitches |
+
+That is a single listen, not a measurement. The headless underrun probe from
+2026-10-17 ran under a load average of about 17, so it still needs a rerun on
+a quiet machine.
