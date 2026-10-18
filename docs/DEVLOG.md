@@ -452,3 +452,9 @@ one conflict, in the ball draw call, and both sides were kept.
   Neither is built.
 - `tools/lg-pinned` was missing (it is gitignored). It is rebuilt from let-go `a13e042` as
   `3p/lg-bin/lg-a13e042791` and symlinked.
+- 2026-10-17: `tools/lg-pinned` now points at `3p/lg-bin/lg-9981aa044e` (let-go `9981aa0`),
+  stamped `-X main.version=1.13.1-0.20261018013810-9981aa044eef`. A version that starts with a
+  digit makes `lg -w` pin that release from the proxy and ignore `LETGO_SRC`; an unstamped
+  `dev` build falls back to the stale `3p/let-go` clone. The native sim ran about 1.65× faster
+  than on a13e (measured 2026-10-17); web fps was inconclusive. `lg-a13e042791` is kept.
+- `tools/heavy.sh` falls back to macOS `lockf(1)` when `flock` is missing.
