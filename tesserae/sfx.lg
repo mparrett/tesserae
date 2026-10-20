@@ -21,7 +21,7 @@
 
 ;; :native when this lg links undertone, :bridge in a browser bundle, else nil.
 (def ^:private backend
-  (cond (native 'audio/trigger) :native
+  (cond (native 'undertone/trigger) :native
         *in-wasm* :bridge
         :else nil))
 
@@ -29,7 +29,7 @@
 
 (defn- trigger* [m]
   (case backend
-    :native ((native 'audio/trigger) m)
+    :native ((native 'undertone/trigger) m)
     :bridge (emit! [:trigger m])
     nil))
 
@@ -53,7 +53,7 @@
 (defn- push-score! []
   (when-let [[mood seed level tension :as sc] @score-state]
     (case backend
-      :native ((native 'audio/set-parameters)
+      :native ((native 'undertone/set-parameters)
                ((native 'undertone.ambience/derive-mood) mood seed level tension))
       :bridge (emit! (into [:score] sc))
       nil)))
@@ -65,16 +65,16 @@
     (reset! on? true)
     (let [g (double (get o :music-gain MUSIC-GAIN))]
       (case backend
-        :native (do (require 'undertone.ambience) ((native 'audio/set-music-gain) g))
+        :native (do (require 'undertone.ambience) ((native 'undertone/set-music-gain) g))
         :bridge (emit! [:music-gain g])))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ;; the bridge opens its own device at page load and starts on a gesture
-    (when (= backend :native) ((native 'audio/music-start)))))
+    (when (= backend :native) ((native 'undertone/music-start)))))
 
 (defn stop! []
   (when @on?
-    (when (= backend :native) ((native 'audio/music-stop)))
+    (when (= backend :native) ((native 'undertone/music-stop)))
     (reset! on? false)))
 
 (defn level!

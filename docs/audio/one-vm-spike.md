@@ -28,6 +28,11 @@ reads the ring. No second runtime, no EDN hop.
   messages, so it must load before let-go's runtime script. Needs the module
   rename and the handle caching from undertone#13 before it can be a PR.
 
+Since then (2026-10-20): undertone#29 and worker mode (undertone#45) are on
+undertone main, and undertone#57 renamed its natives from `audio/` to
+`undertone/` (`undertone/trigger`, `undertone/set-parameters`, and so on), leaving
+`audio` for let-go's seam. `sfx.lg` and `audio-host` follow undertone `7a58a1a`.
+
 ## Build recipe used
 
 ```sh
