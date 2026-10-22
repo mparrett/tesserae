@@ -9,11 +9,10 @@ platform, macOS gets Menlo (no sextants) and other systems something else, so
 the page looks different everywhere. Bundling a face fixes the first; the
 shell's squareCells() fixes the cell, whatever the font.
 
-Default face: DejaVu Sans Mono, chosen by eye (2026-10-14) over Cascadia Mono
-and Fairfax HD in an A/B of the k=1 layout. It has every UI symbol but no
-sextants, so --glyphs sextant falls back to the platform's fonts in the
-browser. --primary cascadia has the full sextant block and takes its few
-missing UI symbols (↻ ⊘ ✎ ✦ ✶) from a second, DejaVu face; with the WebGL
+Default face: Cascadia Mono (decided 2026-10-21). It has the full sextant
+block, which --glyphs sextant needs, and takes its few missing UI symbols
+(↻ ⊘ ✎ ✦ ✶) from a second, DejaVu face. --primary dejavu has every UI symbol but
+no sextants; --primary fairfax is xsofy's pixel face, kept for fun. With the WebGL
 renderer each glyph is drawn into its own cell, so that second face can't
 drift the grid (xsofy saw drift mixing faces under the DOM renderer).
 
@@ -121,7 +120,7 @@ def face(family: str, woff2: bytes) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--primary", choices=sorted(SOURCES), default="dejavu")
+    ap.add_argument("--primary", choices=sorted(SOURCES), default="cascadia")
     ap.add_argument("--shell", type=pathlib.Path, default=ROOT / "web" / "shell.html")
     a = ap.parse_args()
 
