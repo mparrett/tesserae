@@ -96,6 +96,9 @@ def subset(ttf: bytes, cps: set[int], family: str) -> bytes:
         src, out = pathlib.Path(d, "src.ttf"), pathlib.Path(d, "out.woff2")
         src.write_bytes(ttf)
         subprocess.run(["pyftsubset", str(src), "--unicodes=" + ",".join(f"U+{c:04X}" for c in sorted(cps)),
+                        # 13/14 carry the licence, which the OFL and the DejaVu licence
+                        # require to travel with the font; pyftsubset drops them by default.
+                        "--name-IDs=0,1,2,3,4,5,6,13,14",
                         "--flavor=woff2", f"--output-file={out}"], check=True)
         f = TTFont(out)
     ps = family.replace(" ", "") + "-Regular"
