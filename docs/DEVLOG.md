@@ -503,3 +503,23 @@ one conflict, in the ball draw call, and both sides were kept.
   start at row `7 + (count levels)` = 22 and need three rows, so "Q quit" lands on the jump
   line. The k=1 shell picks exactly 24 rows, which exposed it; the 15-level list is what
   outgrew the panel. Not fixed yet.
+
+## 2026-10-22: three fonts for playtests
+
+- **decision (user): Cascadia Mono, Iosevka Term Extended and Unscii 16 are the finalists**, all
+  bundled and picked with `?font=cascadia|iosevka|unscii`; Cascadia stays the default until
+  playtests settle it. Unscii is blocky, which suits a game about breaking blocks; Iosevka is
+  quieter; Cascadia is the most distinctive. `?font=fairfax` keeps xsofy's face for fun. All
+  four inline to about 73 KB of @font-face.
+- **Unscii is unscii-16, not unscii-16-full:** the full variant borrows from GNU Unifont and is
+  GPL; plain unscii-16 is public domain. It lacks ↻ ⊘ ✎ ✦ ✶, which come from Fairfax HD, the
+  other pixel face. In the game the borrowed ⊘ sits a little low.
+- **note:** those five symbols (rotate warning, locked level, custom map, flawless, stun) are
+  the only reason any finalist needs a fallback face. Swapping them for symbols every finalist
+  has would drop the fallbacks.
+- Checked JuliaMono (every symbol, no fallback needed), regular Iosevka Term (0.40 wide, so the
+  square-cell spacing leaves visible gaps between block glyphs) and DejaVu (no sextants; the
+  browser borrows them from whatever system font has them) on a scratch font test page.
+- A capture matrix of font × density (1×, 2×, 3×) × window (phone landscape, laptop, desktop)
+  showed the square-cell fix lands on 0.5 except where the cell height is odd, where it can
+  only get within half a pixel (0.512 at 21×41).
