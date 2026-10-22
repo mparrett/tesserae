@@ -80,7 +80,7 @@
       "color": "green",
       "details": [
         "k=1: 76×24",
-        "k=2: about twice each way"
+        "k=2: 124×50"
       ],
       "row": 1,
       "col": 1
@@ -267,11 +267,19 @@
     "devcell",
     "square",
     "layout",
-    "grid"
+    "grid",
+    "fontsize",
+    "csscell",
+    "board",
+    "sprites",
+    "window",
+    "font",
+    "density",
+    "glyphs"
   ],
   "noteLayout": {},
   "rowY": {},
-  "rev": 38,
+  "rev": 46,
   "connectorAnchor": "center",
   "font": "sans",
   "theme": "warmburnout"
