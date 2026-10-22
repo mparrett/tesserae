@@ -490,3 +490,16 @@ one conflict, in the ball draw call, and both sides were kept.
   DejaVu, Fairfax HD) DejaVu looked best, though the choice isn't final. It has no sextants, so
   `glyphs=sextant` in the browser uses the platform's fonts. The user noted that everything
   looks bold at these sizes; not yet investigated.
+
+## 2026-10-21: Cascadia Mono is the browser font
+
+- **decision (user): Cascadia Mono by default**, reversing 2026-10-14's DejaVu. DejaVu looked
+  nice but has no sextants, so `glyphs=sextant` couldn't render in the browser. Of the faces
+  checked, only Cascadia and Fairfax HD have them all (60/60). Cascadia is the game's own
+  character; Fairfax HD is xsofy's face, kept as `--primary fairfax` for fun.
+- **closed: "text looks bold".** The A/B compared builds at different sizes and densities;
+  there was no weight problem.
+- **found: at exactly 24 rows the title screen loses "1-0 -=[]\ jump to level".** The controls
+  start at row `7 + (count levels)` = 22 and need three rows, so "Q quit" lands on the jump
+  line. The k=1 shell picks exactly 24 rows, which exposed it; the 15-level list is what
+  outgrew the panel. Not fixed yet.
