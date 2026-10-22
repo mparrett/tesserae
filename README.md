@@ -216,6 +216,9 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
   `?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30&all`. The shell adds
   `?grid=large`, which picks a smaller font so the game doubles its raster (124x50,
   k=2): finer rotation and motion, small panel text, and roughly half the frame rate.
+- [How the settings combine](docs/display-settings/display-settings.png): window size,
+  layout, font, screen density and glyph mode, through to font size, cell size and what
+  you see. Its source, `diagram-state.json` beside it, is an agent-diagrams board.
 - Progress isn't saved in the browser yet. let-go's browser storage needs
   `localStorage`, and the VM runs in a Web Worker, which has none, so the title panel
   says "progress not saved".

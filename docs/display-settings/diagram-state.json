@@ -1,0 +1,278 @@
+{
+  "title": "Tesserae browser display: how the settings combine",
+  "width": 1195,
+  "height": 890,
+  "footer": "As of 2026-10-22 (web-font branch). Solid = sets; dashed = shapes but doesn't set",
+  "legend": [
+    {
+      "color": "blue",
+      "label": "setting you choose"
+    },
+    {
+      "color": "green",
+      "label": "derived by the shell / xterm"
+    },
+    {
+      "color": "amber",
+      "label": "what you see"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "window",
+      "label": "Window size",
+      "color": "blue",
+      "details": [
+        "CSS px; phone, laptop, desktop"
+      ],
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "layout",
+      "label": "Layout",
+      "color": "blue",
+      "details": [
+        "k=1 default",
+        "?grid=large → k=2"
+      ],
+      "row": 0,
+      "col": 1,
+      "w": 14,
+      "h": 5
+    },
+    {
+      "id": "font",
+      "label": "Font",
+      "color": "blue",
+      "details": [
+        "?font=cascadia | iosevka",
+        "| unscii | fairfax"
+      ],
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "density",
+      "label": "Screen density",
+      "color": "blue",
+      "details": [
+        "1× monitor, 2× Retina",
+        "3× phone"
+      ],
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "glyphs",
+      "label": "Glyph mode",
+      "color": "blue",
+      "details": [
+        "?glyphs=plain | quadrant",
+        "| sextant"
+      ],
+      "row": 0,
+      "col": 4
+    },
+    {
+      "id": "grid",
+      "label": "Cells needed",
+      "color": "green",
+      "details": [
+        "k=1: 76×24",
+        "k=2: about twice each way"
+      ],
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "fontsize",
+      "label": "Font size",
+      "color": "green",
+      "details": [
+        "largest that fits the grid",
+        "in the window (~12 / 26 / 36px)"
+      ],
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "csscell",
+      "label": "Cell, CSS px",
+      "color": "green",
+      "details": [
+        "width = advance",
+        "height = ascent + descent"
+      ],
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "devcell",
+      "label": "Cell, device px",
+      "color": "green",
+      "details": [
+        "× density, rounded"
+      ],
+      "row": 4,
+      "col": 3
+    },
+    {
+      "id": "square",
+      "label": "Square-cell fix",
+      "color": "green",
+      "details": [
+        "letterSpacing pads width",
+        "to height / 2 (±0.5px if odd)"
+      ],
+      "row": 5,
+      "col": 3,
+      "w": 15,
+      "h": 4
+    },
+    {
+      "id": "board",
+      "label": "Board raster",
+      "color": "amber",
+      "details": [
+        "1 cell = 2 square pixels",
+        "stacked, as half blocks"
+      ],
+      "row": 6,
+      "col": 2
+    },
+    {
+      "id": "sprites",
+      "label": "Sprites (ball)",
+      "color": "amber",
+      "details": [
+        "quadrant 2×2, sextant 2×3",
+        "sub-pixels per cell"
+      ],
+      "row": 6,
+      "col": 4
+    }
+  ],
+  "edges": [
+    {
+      "from": "layout",
+      "to": "grid",
+      "style": "solid",
+      "id": "layout~grid",
+      "toEdge": "N",
+      "toConn": 2
+    },
+    {
+      "from": "grid",
+      "to": "fontsize",
+      "style": "solid",
+      "id": "grid~fontsize",
+      "toEdge": "N",
+      "toConn": 5
+    },
+    {
+      "from": "window",
+      "to": "fontsize",
+      "style": "solid",
+      "id": "window~fontsize",
+      "toEdge": "N",
+      "toConn": 7,
+      "fromEdge": "S",
+      "fromConn": 9
+    },
+    {
+      "from": "font",
+      "to": "fontsize",
+      "style": "dashed",
+      "label": "metrics",
+      "id": "font~fontsize",
+      "toEdge": "N",
+      "toConn": 9
+    },
+    {
+      "from": "fontsize",
+      "to": "csscell",
+      "style": "solid",
+      "id": "fontsize~csscell",
+      "toEdge": "N",
+      "toConn": 3
+    },
+    {
+      "from": "font",
+      "to": "csscell",
+      "style": "solid",
+      "label": "shape",
+      "id": "font~csscell",
+      "toEdge": "N",
+      "toConn": 7
+    },
+    {
+      "from": "csscell",
+      "to": "devcell",
+      "style": "solid",
+      "id": "csscell~devcell"
+    },
+    {
+      "from": "density",
+      "to": "devcell",
+      "style": "solid",
+      "label": "sharpness",
+      "id": "density~devcell"
+    },
+    {
+      "from": "devcell",
+      "to": "square",
+      "style": "solid",
+      "id": "devcell~square"
+    },
+    {
+      "from": "square",
+      "to": "board",
+      "style": "solid",
+      "id": "square~board"
+    },
+    {
+      "from": "square",
+      "to": "sprites",
+      "style": "solid",
+      "id": "square~sprites"
+    },
+    {
+      "from": "glyphs",
+      "to": "sprites",
+      "style": "solid",
+      "label": "detail",
+      "id": "glyphs~sprites"
+    }
+  ],
+  "layout": {
+    "square": {
+      "x": 720,
+      "y": 645
+    },
+    "layout": {
+      "x": 45,
+      "y": 45
+    },
+    "devcell": {
+      "x": 750,
+      "y": 525
+    },
+    "grid": {
+      "x": 225,
+      "y": 165
+    }
+  },
+  "pinned": [
+    "devcell",
+    "square",
+    "layout",
+    "grid"
+  ],
+  "noteLayout": {},
+  "rowY": {},
+  "rev": 38,
+  "connectorAnchor": "center",
+  "font": "sans",
+  "theme": "warmburnout"
+}
