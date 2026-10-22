@@ -435,3 +435,26 @@ one conflict, in the ball draw call, and both sides were kept.
 - **Open decisions (the user's):** merge the 3D spike, make `--t3d-fill` the default with a
   k≈2.5 cap, double-buffered detent, wide/pitched 3D camera, posting the #358 data point
   (draft ready), a GitHub Pages deploy of `docs/table3d`, and the glass-cube 3D idea.
+
+## 2026-10-14: trowel feel exposed (playtest, branch `trowel-tuning-flags`)
+
+- The trowel's lag was the keyboard easing in `update-paddle!`, not input latency. It is now
+  three named constants with player overrides: `PADDLE-SPEED` (62, `--paddle-speed`),
+  `PADDLE-ACCEL` (22, `--paddle-accel`; the time constant is 1/accel, ≈45 ms) and
+  `FOLLOW-GAIN` (14, `--mouse-gain`). The autopilot keeps the stock gain, so sims don't shift.
+  A higher accel already felt better in the playtest.
+- On a terminal without the kitty protocol, `FRESH-MS`/`REPEAT-MS` in `input.lg` add their own
+  hold and overshoot. Those are not exposed.
+- **Open (the user's, revisit later):** trowel physics as a per-level mechanic (dragging
+  through fluid, low/high viscosity, lagged, elastic). The hook is `update-paddle!`: a level
+  key such as `(lv :trowel)` could supply speed/accel/gain, or swap the easing for a spring or
+  a delay line. Also a saved global player setting for trowel feel, in place of the flags.
+  Neither is built.
+- `tools/lg-pinned` was missing (it is gitignored). It is rebuilt from let-go `a13e042` as
+  `3p/lg-bin/lg-a13e042791` and symlinked.
+- 2026-10-17: `tools/lg-pinned` now points at `3p/lg-bin/lg-9981aa044e` (let-go `9981aa0`),
+  stamped `-X main.version=1.13.1-0.20261018013810-9981aa044eef`. A version that starts with a
+  digit makes `lg -w` pin that release from the proxy and ignore `LETGO_SRC`; an unstamped
+  `dev` build falls back to the stale `3p/let-go` clone. The native sim ran about 1.65× faster
+  than on a13e (measured 2026-10-17); web fps was inconclusive. `lg-a13e042791` is kept.
+- `tools/heavy.sh` falls back to macOS `lockf(1)` when `flock` is missing.

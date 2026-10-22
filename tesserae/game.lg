@@ -21,6 +21,13 @@
 (def PADDLE-Y 46.0)        ; top surface of the bottom trowel (screen frame)
 (def TOP-Y 2.0)            ; bottom surface of the top trowel
 (def PADDLE-W 9.0)
+;; Trowel feel. Keys ease the velocity toward +-PADDLE-SPEED at PADDLE-ACCEL
+;; (1/PADDLE-ACCEL s time constant), which is the deliberate weight; the mouse
+;; and the autopilot steer proportionally toward a target x with FOLLOW-GAIN.
+;; --paddle-speed / --paddle-accel / --mouse-gain override these for the player.
+(def PADDLE-SPEED 62.0)
+(def PADDLE-ACCEL 22.0)
+(def FOLLOW-GAIN 14.0)
 (def PANEL-W 26)
 (def TAU (* 2.0 math/PI))
 
@@ -1400,10 +1407,13 @@
                  (and @in/mouse-moved mx) (/ (- mx (:ox sc) -0.5) (:k sc))
                  :else nil)
         ax (in/axis [:left :a :h] [:right :d :l])
+        o @opts
+        ;; the autopilot keeps the stock gain so sim/autoplay results don't move with tuning
+        gain (if auto? FOLLOW-GAIN (get o :mouse-gain FOLLOW-GAIN))
         v (if target
-            (clampf (* 14.0 (- target (:x p))) -110.0 110.0)
-            (let [want (* ax 62.0)]
-              (+ (:v p) (* (- want (:v p)) (min 1.0 (* dt 22.0))))))
+            (clampf (* gain (- target (:x p))) -110.0 110.0)
+            (let [want (* ax (get o :paddle-speed PADDLE-SPEED))]
+              (+ (:v p) (* (- want (:v p)) (min 1.0 (* dt (get o :paddle-accel PADDLE-ACCEL)))))))
         v (if (pos? (:stun @S 0.0)) 0.0 v)
         x (clampf (+ (:x p) (* v dt)) hw (- 48.0 hw))
         v (if (or (= x hw) (= x (- 48.0 hw))) 0.0 v)]
