@@ -89,7 +89,8 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   function squareCells() {
     const d = term._core?._renderService?.dimensions?.device;
     if (!d || !d.char.width || !d.cell.height) return;
-    term.options.letterSpacing = (Math.round(d.cell.height / 2) - d.char.width) / (window.devicePixelRatio || 1);
+    // xterm adds letterSpacing to the device-pixel cell unscaled, so this stays in device pixels.
+    term.options.letterSpacing = Math.round(d.cell.height / 2) - d.char.width;
   }
   function pickFont() {
     let fallback = null;
@@ -99,7 +100,10 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
       const d = fit.proposeDimensions();
       if (!d) continue;
       if (large && d.cols >= 124 && d.rows >= 50 && fs >= 9) return fs;
-      if (fallback === null && d.cols >= 76 && d.rows >= 24) fallback = fs;
+      if (d.cols >= 76 && d.rows >= 24) {
+        if (!large) return fs;
+        if (fallback === null) fallback = fs;
+      }
     }
     return fallback || 10;
   }
@@ -110,6 +114,9 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     // font wait below is lost.
     let opened = false, pending = '';
     window.LetGoHost.onOutput((s) => { if (opened) term.write(s); else pending += s; });
+    // The host starts the VM without awaiting this callback, so give it the layout's
+    // size now; the real size follows once the terminal is open.
+    if (mode === 'worker') window.LetGoHost.setSize(large ? 124 : 76, large ? 50 : 24);
     // xterm measures the cell in open(), and the WebGL renderer caches each
     // glyph the first time it draws it, so both faces must be loaded first:
     // a face that's declared but unused isn't fetched until something needs it.
