@@ -1,0 +1,6 @@
+Unscii 2.1 by viznut, https://viznut.fi/unscii/
+
+tesserae bundles unscii-16 (not unscii-16-full). From the Unscii page, as of 2026-10-22:
+
+  "unscii-16-full" falls under GPL because of how Unifont is licensed; the other
+  variants are in the Public Domain.
