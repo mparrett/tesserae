@@ -203,8 +203,8 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
   `-w-shell` template that picks the largest font that fits the game's 76x24 layout, so
   it looks as it does in a terminal at k=1, and uses xterm's WebGL renderer.
 - The terminal font is bundled in the shell, so every platform gets the same look,
-  sextants included. `?font=` picks one: `cascadia` (Cascadia Mono, the default),
-  `iosevka` (Iosevka Term Extended), `unscii` (Unscii 16) or `fairfax` (xsofy's Fairfax
+  sextants included. `?font=` picks one: `iosevka` (Iosevka Term Extended, the default),
+  `cascadia` (Cascadia Mono), `unscii` (Unscii 16) or `fairfax` (xsofy's Fairfax
   HD). The shell pads the cell so
   it's exactly twice as tall as wide, keeping the raster's pixels square. `?font=system`
   uses the platform mono instead. `tools/gen-terminal-font.py` regenerates the font from

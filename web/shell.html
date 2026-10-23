@@ -61,10 +61,10 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   // families); ?font=system uses the platform mono instead.
   const FACES = { cascadia: 'Tess Mono', iosevka: 'Tess Plain', unscii: 'Tess Block', fairfax: 'Tess Fax' };
   const SYSTEM = '"DejaVu Sans Mono", "Menlo", "Consolas", monospace';
-  const fontKey = new URLSearchParams(location.search).get('font') || 'cascadia';
+  const fontKey = new URLSearchParams(location.search).get('font') || 'iosevka';
   const sysFont = fontKey === 'system';
-  if (!sysFont && !FACES[fontKey]) console.warn('unknown ?font=' + fontKey + '; using cascadia');
-  const family = FACES[fontKey] || FACES.cascadia;
+  if (!sysFont && !FACES[fontKey]) console.warn('unknown ?font=' + fontKey + '; using iosevka');
+  const family = FACES[fontKey] || FACES.iosevka;
   const term = new Terminal({
     fontFamily: sysFont ? SYSTEM : `"${family}", "${family} Fallback", ` + SYSTEM,
     fontSize: 14,

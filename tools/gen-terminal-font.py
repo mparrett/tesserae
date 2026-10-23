@@ -10,8 +10,8 @@ the page looks different everywhere. Bundling a face fixes the first; the
 shell's squareCells() fixes the cell, whatever the font.
 
 Every face in FACES is bundled, and the page picks one with ?font=<key>. Three
-finalists are under playtest (2026-10-22), all with the full sextant block that
---glyphs sextant needs: Cascadia Mono (the default), Iosevka Term Extended and
+finalists were playtested (2026-10-22), all with the full sextant block that
+--glyphs sextant needs: Iosevka Term Extended (the default), Cascadia Mono and
 Unscii 16. Fairfax HD, xsofy's face, is kept for fun. A face missing a few UI
 symbols (↻ ⊘ ✎ ✦ ✶) takes them from its fallback face. With the WebGL renderer
 each glyph is drawn into its own cell, so a second face can't drift the grid
