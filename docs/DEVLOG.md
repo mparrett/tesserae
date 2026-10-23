@@ -458,3 +458,68 @@ one conflict, in the ball draw call, and both sides were kept.
   `dev` build falls back to the stale `3p/let-go` clone. The native sim ran about 1.65× faster
   than on a13e (measured 2026-10-17); web fps was inconclusive. `lg-a13e042791` is kept.
 - `tools/heavy.sh` falls back to macOS `lockf(1)` when `flock` is missing.
+
+## 2026-10-14: a bundled terminal font for the browser build
+
+- **decision: Cascadia Mono, with DejaVu Sans Mono for ↻ ⊘ ✎ ✦ ✶.** The shell used to ask for
+  DejaVu Sans Mono, which macOS doesn't have, so the page fell back to Menlo there and looked
+  different on every OS. Of the free monos checked (Cascadia, DejaVu, JetBrains, Inconsolata,
+  Space Mono, and xsofy's Fairfax HD), Cascadia is the only regular-looking one with the full
+  sextant block and a cell close to 0.5 wide/high (0.504). xterm draws the quadrant blocks
+  itself (customGlyphs) but not sextants, even in 6.0.0. Fairfax HD covers everything at
+  exactly 0.5 but is a pixel face. Cubio Mono and Akkurat Mono are commercial.
+- `tools/gen-terminal-font.py` follows xsofy's: pinned, checksummed downloads, a subset of
+  what the game draws, inlined as woff2 (about 23 KB). The faces are renamed "Tess Mono"
+  because Cascadia's licence reserves its name.
+- **surprise:** the font alone didn't give square pixels. xterm rounds the cell to whole
+  device pixels, so Cascadia at 15px came out 8×18 (0.444). The shell now sets `letterSpacing`
+  so the cell is exactly half as wide as tall in device pixels, whatever the font. That needs
+  xterm internals (`_renderService.dimensions`), and is skipped if they move.
+- The shell loads both faces before `term.open`: xterm measures the cell there, and the WebGL
+  renderer caches each glyph the first time it draws it.
+
+## 2026-10-14: the browser build defaults to k=1
+
+- **decision (user):** the web shell picks the largest font that fits the 76×24 layout, so the
+  arena and the side panel keep the proportions they have in a terminal. Since the v2 browser
+  build it had shrunk the font to reach 124×50, pushing the game to k=2: a huge arena, tiny
+  panel text, and half the frame rate. `?grid=large` keeps that layout; `?grid=small` is gone,
+  since it's now the default. The font-size search now starts at 64px, not 28, so k=1 fills a
+  large window.
+- **decision (user): DejaVu Sans Mono for now.** In an A/B of the padded k=1 page (Cascadia,
+  DejaVu, Fairfax HD) DejaVu looked best, though the choice isn't final. It has no sextants, so
+  `glyphs=sextant` in the browser uses the platform's fonts. The user noted that everything
+  looks bold at these sizes; not yet investigated.
+
+## 2026-10-21: Cascadia Mono is the browser font
+
+- **decision (user): Cascadia Mono by default**, reversing 2026-10-14's DejaVu. DejaVu looked
+  nice but has no sextants, so `glyphs=sextant` couldn't render in the browser. Of the faces
+  checked, only Cascadia and Fairfax HD have them all (60/60). Cascadia is the game's own
+  character; Fairfax HD is xsofy's face, kept as `--primary fairfax` for fun.
+- **closed: "text looks bold".** The A/B compared builds at different sizes and densities;
+  there was no weight problem.
+- **found: at exactly 24 rows the title screen loses "1-0 -=[]\ jump to level".** The controls
+  start at row `7 + (count levels)` = 22 and need three rows, so "Q quit" lands on the jump
+  line. The k=1 shell picks exactly 24 rows, which exposed it; the 15-level list is what
+  outgrew the panel. Not fixed yet.
+
+## 2026-10-22: three fonts for playtests
+
+- **decision (user): Cascadia Mono, Iosevka Term Extended and Unscii 16 are the finalists**, all
+  bundled and picked with `?font=cascadia|iosevka|unscii`; Cascadia stays the default until
+  playtests settle it. Unscii is blocky, which suits a game about breaking blocks; Iosevka is
+  quieter; Cascadia is the most distinctive. `?font=fairfax` keeps xsofy's face for fun. All
+  four inline to about 73 KB of @font-face.
+- **Unscii is unscii-16, not unscii-16-full:** the full variant borrows from GNU Unifont and is
+  GPL; plain unscii-16 is public domain. It lacks ↻ ⊘ ✎ ✦ ✶, which come from Fairfax HD, the
+  other pixel face. In the game the borrowed ⊘ sits a little low.
+- **note:** those five symbols (rotate warning, locked level, custom map, flawless, stun) are
+  the only reason any finalist needs a fallback face. Swapping them for symbols every finalist
+  has would drop the fallbacks.
+- Checked JuliaMono (every symbol, no fallback needed), regular Iosevka Term (0.40 wide, so the
+  square-cell spacing leaves visible gaps between block glyphs) and DejaVu (no sextants; the
+  browser borrows them from whatever system font has them) on a scratch font test page.
+- A capture matrix of font × density (1×, 2×, 3×) × window (phone landscape, laptop, desktop)
+  showed the square-cell fix lands on 0.5 except where the cell height is odd, where it can
+  only get within half a pixel (0.512 at 21×41).

@@ -200,15 +200,25 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
 
 - `dist/web/index.html` is self-contained (about 8.5 MB, the program wasm is inlined)
   apart from xterm.js, which loads from jsDelivr. The shell is `web/shell.html`, an
-  `-w-shell` template that picks the font size so the grid reaches 124x50 (the doubled
-  raster) when the window allows it, and uses xterm's WebGL renderer.
+  `-w-shell` template that picks the largest font that fits the game's 76x24 layout, so
+  it looks as it does in a terminal at k=1, and uses xterm's WebGL renderer.
+- The terminal font is bundled in the shell, so every platform gets the same look,
+  sextants included. `?font=` picks one: `iosevka` (Iosevka Term Extended, the default),
+  `cascadia` (Cascadia Mono), `unscii` (Unscii 16) or `fairfax` (xsofy's Fairfax
+  HD). The shell pads the cell so
+  it's exactly twice as tall as wide, keeping the raster's pixels square. `?font=system`
+  uses the platform mono instead. `tools/gen-terminal-font.py` regenerates the font from
+  what the game draws.
 - The page must be served cross-origin isolated (COOP/COEP headers). Otherwise the first
   key read fails with "no SharedArrayBuffer". `tools/coi-serve.py` does this;
   `python -m http.server` does not.
 - No command line in a browser, so play.sh's flags come from the URL:
   `?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30&all`. The shell adds
-  `?grid=small`, which skips the doubled raster: a quarter of the pixels, roughly twice
-  the frame rate.
+  `?grid=large`, which picks a smaller font so the game doubles its raster (124x50,
+  k=2): finer rotation and motion, small panel text, and roughly half the frame rate.
+- [How the settings combine](docs/display-settings/display-settings.png): window size,
+  layout, font, screen density and glyph mode, through to font size, cell size and what
+  you see. Its source, `diagram-state.json` beside it, is an agent-diagrams board.
 - Progress isn't saved in the browser yet. let-go's browser storage needs
   `localStorage`, and the VM runs in a Web Worker, which has none, so the title panel
   says "progress not saved".
