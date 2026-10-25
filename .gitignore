@@ -1,3 +1,4 @@
 tools/lg-pinned
 *.ans
 dist/
+tools/fonts/.cache/
