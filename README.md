@@ -261,6 +261,9 @@ LG=../lg-tesserae-aot ./play.sh --stats
 ./tools/test.sh                 # clojure.test suites in test/; exits 1 on any failure
 ```
 
+There's no hosted CI; `just ci` runs the tests, every level in the simulator for a few
+game-seconds, and the web build, and is the check to pass before merging.
+
 They cover `tesserae.input/parse` (plain keys, CSI/SS3 arrows, kitty CSI-u
 press/repeat/release, BEL resize, Ctrl-C, mouse maps), tetromino packing determinism,
 level map validity (24×24, goal count > 0, a par per level), the meta layer (medals,
