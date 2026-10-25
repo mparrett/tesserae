@@ -1729,11 +1729,12 @@
 
 (defn new-screen
   "A screen for a tc x tr terminal. The panel is as tall as the title screen's
-   (level list, then three rows of controls); stacked under the arena it needs
-   only its first 11 rows (through the status line), which sets the 50x38 grid
-   web/shell.html aims for on a phone held upright."
+   (level list, then three rows of controls, and the --hud-stats line below
+   those); stacked under the arena it needs only its first 11 rows (through the
+   status line), which sets the 50x38 grid web/shell.html aims for on a phone
+   held upright."
   [tc tr]
-  (gfx/make-screen tc tr PANEL-W (+ (meta-controls-row) 3) 11))
+  (gfx/make-screen tc tr PANEL-W (+ (meta-controls-row) (if (:hud-stats @opts) 5 3)) 11))
 
 (def panel-cache (atom {}))
 

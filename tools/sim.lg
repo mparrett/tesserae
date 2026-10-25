@@ -6,7 +6,7 @@
 ;; terminal output, and reports game-seconds to clear, lives lost and peak balls. The
 ;; autopilot is a weak player (no aiming, no magnet), so read the numbers as an upper
 ;; bound on difficulty for a paddle level and a sanity check for the rest.
-(require '[clojure.string] '[tesserae.game :as g] '[tesserae.gfx :as gfx] '[tesserae.levels :as L])
+(require '[clojure.string] '[tesserae.game :as g] '[tesserae.levels :as L])
 
 (def argv *command-line-args*)
 (defn flag [name default]
@@ -22,7 +22,7 @@
                  ns (keep (fn [a] (when (re-matches #"\d+" a) (dec (parse-long a)))) pos)]
              (if (seq ns) ns (range (count L/levels)))))
 
-(reset! g/scr (gfx/make-screen 160 52 26))
+(reset! g/scr (g/new-screen 160 52))
 (reset! g/opts {:autoplay true})
 (g/wire-world!)
 
