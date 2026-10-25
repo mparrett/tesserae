@@ -116,19 +116,29 @@
 (def WORLD 48.0)
 (def HALFW 24.0)
 
+(defn- best-k [fits?]
+  (loop [k 4] (cond (zero? k) 0 (fits? k) k :else (recur (dec k)))))
+
 (defn make-screen
-  "Layout for a terminal of tc x tr cells with a side panel of panel-w cols."
-  [tc tr panel-w]
-  (let [k (loop [k 4] (cond (zero? k) 0
-                            (and (<= (+ (* 48 k) panel-w 2) tc) (<= (* 24 k) tr)) k
-                            :else (recur (dec k))))
-        k (max k 1)
+  "Layout for a terminal of tc x tr cells and a panel of panel-w x panel-h:
+   beside the arena, or stacked under it (framed, one blank row between) when
+   that allows a bigger raster, as on a phone held upright. Where the side
+   layout can't fit at all, stacked makes do with panel-min rows below the
+   frame and cuts the panel's rows past the bottom."
+  [tc tr panel-w panel-h panel-min]
+  (let [side-k (best-k (fn [k] (and (<= (+ (* 48 k) panel-w 2) tc) (<= (* 24 k) tr))))
+        stack-fit (fn [ph] (best-k (fn [k] (and (<= (+ (* 48 k) 2) tc) (<= (+ (* 24 k) 3 ph) tr)))))
+        stack-k (stack-fit (if (zero? side-k) panel-min panel-h))
+        stacked? (> stack-k side-k)
+        k (max 1 (if stacked? stack-k side-k))
         S (* 48 k)
         cols S
         rows (quot S 2)
         framed? (<= (+ rows 2) tr)
-        ox (max 2 (+ 1 (quot (- tc panel-w cols) 2)))
-        oy (if framed? (+ 2 (quot (- tr rows 2) 2)) 1)
+        ox (max 2 (+ 1 (quot (- tc (if stacked? 0 panel-w) cols) 2)))
+        oy (cond stacked? (+ 2 (max 0 (quot (- tr rows 3 panel-h) 2)))
+                 framed? (+ 2 (quot (- tr rows 2) 2))
+                 :else 1)
         npx (* S S)
         ncell (* cols rows)
         ovr (int-array npx)
@@ -136,7 +146,8 @@
         [gcode gstr] (glyph-tables gmode)]
     (dotimes [i npx] (aset ovr i -1))
     {:k k :S S :cols cols :rows rows :ox ox :oy oy :framed? framed?
-     :tc tc :tr tr :panel-x (+ ox cols 3)
+     :tc tc :tr tr :stacked? stacked?
+     :panel-x (if stacked? ox (+ ox cols 3)) :panel-y (if stacked? (+ oy rows 2) oy)
      :acc-r (double-array npx) :acc-g (double-array npx) :acc-b (double-array npx)
      :ovr ovr
      :mark (int-array ncell) :pmark (int-array ncell)

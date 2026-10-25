@@ -1727,6 +1727,14 @@
     (meta-overlay! sc st)
     (gfx/compose! sc w/sample sb)))
 
+(defn new-screen
+  "A screen for a tc x tr terminal. The panel is as tall as the title screen's
+   (level list, then three rows of controls); stacked under the arena it needs
+   only its first 11 rows (through the status line), which sets the 50x38 grid
+   web/shell.html aims for on a phone held upright."
+  [tc tr]
+  (gfx/make-screen tc tr PANEL-W (+ (meta-controls-row) 3) 11))
+
 (def panel-cache (atom {}))
 
 (defn panel-line! [^StringBuilder sb row s c]
@@ -1734,7 +1742,7 @@
         s (let [s (str s)] (if (> (count s) (- PANEL-W 1)) (subs s 0 (- PANEL-W 1)) s))
         s (str s (apply str (repeat (- PANEL-W (count s)) " ")))
         key [s c]]
-    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (not= key (get @panel-cache row)))
+    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (<= row (:tr sc)) (not= key (get @panel-cache row)))
       (swap! panel-cache assoc row key)
       (gfx/at sb (:panel-x sc) row)
       (gfx/bg! sb 0x000000)
@@ -1772,7 +1780,7 @@
         (panel-line! sb (r 15) (str "  " b) c)))))
 
 (defn draw-panel! [^StringBuilder sb]
-  (let [sc @scr st @S l (lvl) top (:oy sc) acc (:accent (theme))
+  (let [sc @scr st @S l (lvl) top (:panel-y sc) acc (:accent (theme))
         title? (neg? (:li st))
         r (fn [i] (+ top i))
         goal-word (case (:goal l) :clear "tiles left" :build "ghosts left" :lamps "lamps dark" :heart "tiles left"
@@ -1963,7 +1971,7 @@
   (let [st @S mode (:mode st) title? (neg? (:li st))]
     (cond
       (= k :ctrl-c) (when-not *in-wasm* (reset! quit? true))   ; a browser tab can't quit
-      (= k :resize) (do (reset! scr (gfx/make-screen (first (term/size)) (second (term/size)) PANEL-W))
+      (= k :resize) (do (reset! scr (new-screen (first (term/size)) (second (term/size))))
                         (gfx/set-angle! @scr (:theta st))
                         (gfx/rebuild-cache! @scr w/sample)
                         (clear-screen!)
@@ -2198,7 +2206,7 @@
                      (recur (rest ss) (- left (count s)) (conj out [s c])))))
         n (reduce + (map #(count (first %)) segs))
         key segs]
-    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (not= key (get @panel-cache row)))
+    (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (<= row (:tr sc)) (not= key (get @panel-cache row)))
       (swap! panel-cache assoc row key)
       (gfx/at sb (:panel-x sc) row)
       (gfx/bg! sb 0x000000)
@@ -2338,7 +2346,7 @@
   (reset! opts o)
   (gfx/set-glyph-mode! (get o :glyphs :quadrant))
   (let [[tc tr] (or (term/size) [100 30])]
-    (reset! scr (gfx/make-screen tc tr PANEL-W)))
+    (reset! scr (new-screen tc tr)))
   (wire-world!)
   (reset! S {:score 0 :lives 5 :mode :play :mode-t 0.0 :best 0})
   (meta-init! o)

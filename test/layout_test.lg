@@ -1,0 +1,26 @@
+(ns test.layout-test
+  "tesserae.gfx/make-screen: the panel beside the arena, or stacked under it."
+  (:require [clojure.test :refer [deftest is testing]]
+            [tesserae.gfx :as gfx]))
+
+(defn- shape [tc tr]
+  (select-keys (gfx/make-screen tc tr 26 25 11) [:k :stacked? :ox :oy :panel-x :panel-y]))
+
+(deftest side-by-side
+  (testing "the k=1 terminal layout keeps the panel on the right"
+    (is (= {:k 1 :stacked? false :ox 2 :oy 1 :panel-x 53 :panel-y 1} (shape 76 24))))
+  (testing "?grid=large"
+    (is (= {:k 2 :stacked? false} (select-keys (shape 124 50) [:k :stacked?]))))
+  (testing "a tie between the two goes to the side layout"
+    (is (false? (:stacked? (shape 200 110))))))
+
+(deftest stacked
+  (testing "a phone held upright: the panel goes under the framed arena"
+    (is (= {:k 1 :stacked? true :ox 2 :oy 2 :panel-x 2 :panel-y 28} (shape 50 52))))
+  (testing "a shorter screen keeps the arena at the top and cuts the panel"
+    (is (= {:k 1 :stacked? true :oy 2 :panel-y 28} (select-keys (shape 50 38) [:k :stacked? :oy :panel-y]))))
+  (testing "extra space centres the whole stack"
+    (is (= {:ox 3 :oy 4} (select-keys (shape 52 56) [:ox :oy]))))
+  (testing "one row or column short falls back to the side layout"
+    (is (false? (:stacked? (shape 50 37))))
+    (is (false? (:stacked? (shape 49 52))))))

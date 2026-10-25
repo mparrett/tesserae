@@ -277,7 +277,7 @@
 (defn handle! [[k ev]]
   (cond
     (= k :resize)
-    (do (reset! g/scr (gfx/make-screen (first (term/size)) (second (term/size)) g/PANEL-W))
+    (do (reset! g/scr (g/new-screen (first (term/size)) (second (term/size))))
         (g/clear-screen!)
         (if (= :play (:mode @E)) (do (g/handle-event! [k ev]) nil) (refresh!)))
     (= :play (:mode @E)) (g/handle-event! [k ev])
@@ -337,7 +337,7 @@
                [[(str "  " label) DIM]])))
 
 (defn draw-panel! [^StringBuilder sb]
-  (let [sc @g/scr e @E d (doc) top (:oy sc) acc (:accent (g/theme))
+  (let [sc @g/scr e @E d (doc) top (:panel-y sc) acc (:accent (g/theme))
         maxrow (:tr sc)
         line (fn [i s c] (when (<= (+ top i) maxrow) (g/panel-line! sb (+ top i) s c)))
         segs (fn [i ss] (when (<= (+ top i) maxrow) (g/panel-segs! sb (+ top i) ss)))
@@ -421,7 +421,7 @@
         (reset! M/saving? false)                   ; the editor never writes progress
         (gfx/set-glyph-mode! (get o :glyphs :quadrant))
         (let [[tc tr] (or (term/size) [100 30])]
-          (reset! g/scr (gfx/make-screen tc tr g/PANEL-W)))
+          (reset! g/scr (g/new-screen tc tr)))
         (g/wire-world!)
         (reset! g/S {:score 0 :lives 5 :mode :edit :mode-t 0.0 :best 0 :li -1})
         (reset! E {:doc doc :file file :dirty false :undo () :cx 11 :cy 11 :brush \?
