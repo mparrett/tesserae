@@ -81,9 +81,12 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   term.loadAddon(fit);
 
   // Largest font that fits the game's k=1 layout (76x24), so the arena and the
-  // side panel keep the proportions they have in a terminal. ?grid=large asks
-  // for the doubled raster (124x50, k=2) instead: finer rotation and motion,
-  // tiny panel text, four times the pixels per frame.
+  // side panel keep the proportions they have in a terminal, or its stacked
+  // layout (at least 50x38: the arena, then as much of the panel as fits;
+  // game.lg new-screen) when that gives a bigger font, as on a phone held
+  // upright. ?grid=large asks for the
+  // doubled raster (124x50, k=2) instead: finer rotation and motion, tiny panel
+  // text, four times the pixels per frame.
   const large = new URLSearchParams(location.search).get('grid') === 'large';
   // The raster's pixels are square only if a cell is exactly half as wide as
   // it is tall, in device pixels. Fonts and xterm's whole-pixel rounding rarely
@@ -123,7 +126,8 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     return null;
   }
   function pickFont() {
-    return (large && largest(124, 50, 9)) || largest(76, 24, 7) || 10;
+    return (large && largest(124, 50, 9))
+      || Math.max(largest(76, 24, 7) || 0, largest(50, 38, 7) || 0) || 10;
   }
   function layout() { term.options.fontSize = pickFont(); squareCells(); fit.fit(); }
   let layoutQueued = false;
