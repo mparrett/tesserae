@@ -6,8 +6,8 @@
 #   NO_BUILD=1 tools/serve-web.sh   (after copying, or pass the outdir below)
 #
 # UNDERTONE is the undertone checkout holding cmd/undertone-bridge.
-# TINYGO=1 builds the bridge with TinyGo instead of Go: 6.4 MB against 29 MB
-# (TinyGo 0.43, 2026-10-25), and it played snappier on a phone. It needs
+# The bridge is built with TinyGo: 6.4 MB against Go's 29 MB (TinyGo 0.43,
+# 2026-10-25), and it played snappier on a phone. GO=1 builds it with Go. It needs
 # -stack-size=1MB: at TinyGo's default the bridge overflows a goroutine stack
 # once it's idle, which 0.43 reports as a stack overflow or just hangs the page.
 set -euo pipefail
@@ -21,7 +21,7 @@ trap 'rm -f "$shell"' EXIT
 sed 's|</body>|  <script src="undertone-bridge.js"></script>\n</body>|' "$here/web/shell.html" > "$shell"
 TESS_WEB_SHELL="$shell" "$here/tools/build-web.sh" "$out"
 echo "building undertone-bridge.wasm ..."
-if [ -n "${TINYGO:-}" ]; then
+if [ -z "${GO:-}" ]; then
   (cd "$UNDERTONE" && "$here/tools/heavy.sh" tinygo build -target wasm -no-debug -opt=z -stack-size=1MB \
      -o "$out/undertone-bridge.wasm" ./cmd/undertone-bridge)
   cp "$(tinygo env TINYGOROOT)/targets/wasm_exec.js" "$out/undertone-wasm_exec.js"
