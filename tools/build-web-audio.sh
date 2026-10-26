@@ -6,6 +6,7 @@
 #   NO_BUILD=1 tools/serve-web.sh   (after copying, or pass the outdir below)
 #
 # UNDERTONE is the undertone checkout holding cmd/undertone-bridge.
+# ?audiolab on the page adds a latency panel (web/audiolab.js).
 # The bridge is built with TinyGo: 6.4 MB against Go's 29 MB (TinyGo 0.43,
 # 2026-10-25), and it played snappier on a phone. GO=1 builds it with Go. It needs
 # -stack-size=1MB: at TinyGo's default the bridge overflows a goroutine stack
@@ -18,7 +19,7 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 shell="$(mktemp -t tess-shell).html"
 trap 'rm -f "$shell"' EXIT
-sed 's|</body>|  <script src="undertone-bridge.js"></script>\n</body>|' "$here/web/shell.html" > "$shell"
+sed 's|</body>|  <script src="audiolab.js"></script>\n  <script src="undertone-bridge.js"></script>\n</body>|' "$here/web/shell.html" > "$shell"
 TESS_WEB_SHELL="$shell" "$here/tools/build-web.sh" "$out"
 echo "building undertone-bridge.wasm ..."
 if [ -z "${GO:-}" ]; then
@@ -29,5 +30,5 @@ else
   (cd "$UNDERTONE" && GOOS=js GOARCH=wasm "$here/tools/heavy.sh" go build -o "$out/undertone-bridge.wasm" ./cmd/undertone-bridge)
   cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$out/undertone-wasm_exec.js"
 fi
-cp "$here/web/undertone-bridge.js" "$out/"
+cp "$here/web/undertone-bridge.js" "$here/web/audiolab.js" "$out/"
 ls -la "$out" | sed 1d
