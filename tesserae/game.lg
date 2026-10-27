@@ -524,7 +524,7 @@
             :lodes (lodestones)
             ;; meta layer: per-level bookkeeping
             :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
-    (sfx/level! li (:theme l) (boolean (:core l)))
+    (sfx/level! li (:theme l) (boolean (:core l)) (:lives @S))
     (when (:core l) (boss-init! l))
     (when (:well l) (well-init!))
     (when (:orrery l) (orrery-init! l))
@@ -705,15 +705,26 @@
         (w/put! i w/SHIELD c)
         (burst! cx cy 0x8a8070 8 9.0)))))
 
+(defn lose-spark!
+  "Take a life, with the banner msg for dur seconds when play goes on.
+   Returns true when it does, false on game over."
+  [msg dur]
+  (let [st (swap! S update :lives dec)]
+    (sfx/lives! (:lives st))
+    (if (<= (:lives st) 0)
+      (do (swap! S assoc :mode :over :mode-t 0.0)
+          (sfx/game-over!)
+          (banner! "THE GROUT SETTLES" 0xff6070 99.0)
+          false)
+      (do (banner! msg 0xff7080 dur)
+          (sfx/spark-lost!)
+          true))))
+
 (defn swirl-hit! [sx]
   (let [[wx wy] (gfx/s->w @scr sx PADDLE-Y)]
     (burst! wx wy 0xff5030 34 26.0)
     (swap! S update :lost inc)                     ; meta: no "unbroken" bonus
-    (let [st (swap! S update :lives dec)]
-      (if (<= (:lives st) 0)
-        (do (swap! S assoc :mode :over :mode-t 0.0)
-            (banner! "THE GROUT SETTLES" 0xff6070 99.0))
-        (banner! "SWIRLED · SPARK LOST" 0xff7080 1.6)))))
+    (lose-spark! "SWIRLED · SPARK LOST" 1.6)))
 
 (defn threat-window? [] (let [st @S] (boolean (or (:swirl st) (:swirl-warn st)))))
 
@@ -1012,11 +1023,7 @@
           (let [[cx cy] (w/tile-center i)]
             (burst! cx cy (aget w/tbase i) 4 12.0)
             (w/clear! i)))))
-    (let [st (swap! S update :lives dec)]
-      (if (<= (:lives st) 0)
-        (do (swap! S assoc :mode :over :mode-t 0.0)
-            (banner! "THE GROUT SETTLES" 0xff6070 99.0))
-        (banner! "THE WELL CHOKES · SPARK LOST" 0xff7080 1.8)))))
+    (lose-spark! "THE WELL CHOKES · SPARK LOST" 1.8)))
 
 (defn brim? []
   ;; any set tile in the well's top two rows
@@ -1496,19 +1503,12 @@
         (banner! "MARBLE LOST  -150" 0xff7080 1.4)
         (swap! S assoc :combo 0 :tilt [0.0 0.0]
                :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S))) 0.0 0.0 :marble)]))
-  (let [st (swap! S update :lives dec)]
-    (if (<= (:lives st) 0)
-      (do (swap! S assoc :mode :over :mode-t 0.0)
-          (sfx/game-over!)
-          (banner! "THE GROUT SETTLES" 0xff6070 99.0))
-      (do (banner! (if (lv :tilt) "MARBLE LOST" "SPARK LOST") 0xff7080 1.4)
-          (sfx/spark-lost!)
-          (when (= 1 (:lives st)) (sfx/tension! 0.5))
-          (swap! S assoc :combo 0)
+    (when (lose-spark! (if (lv :tilt) "MARBLE LOST" "SPARK LOST") 1.4)
+      (do (swap! S assoc :combo 0)
           (if (lv :tilt)
             (swap! S assoc :tilt [0.0 0.0] :balls [(new-ball (first (first (:starts @S))) (second (first (:starts @S)))
                                              0.0 0.0 :marble)])
-            (spawn-balls!)))))))))
+            (spawn-balls!))))))))
 
 (defn level-won! []
   (let [secs (:time @S)

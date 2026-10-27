@@ -8,8 +8,8 @@
    game could branch on, so autoplay and replays stay deterministic.
 
    The score comes from undertone's `ambience/derive-mood`, required at
-   runtime only when audio exists (its source lives in undertone, on the
-   -source-paths that play-audio.sh passes).
+   runtime only when audio exists (undertone registers that namespace's
+   source at init, so no source path is needed).
 
    In the browser the game runs in a Web Worker, which can't open audio, so
    the same commands go to the page as EDN over js/emit, where undertone's
@@ -40,6 +40,14 @@
 (def MUSIC-GAIN 0.3)
 (def ^:private quiet? (atom true))     ; the title's attract demo plays no sfx
 (def ^:private score-state (atom nil)) ; [mood seed level tension]
+(def ^:private base-tension (atom 0.0)) ; the level's own, before the last-spark lift
+(def ^:private last-spark? (atom false))
+
+;; On the last spark the score tightens on top of the level's own tension.
+(def LAST-SPARK-LIFT 0.4)
+
+(defn- tension-now []
+  (min 1.0 (+ @base-tension (if @last-spark? LAST-SPARK-LIFT 0.0))))
 (def ^:private last-ms (atom {}))      ; shot name -> ms it last fired
 
 (defn- now-ms [] (quot (System/nanoTime) 1000000))
@@ -78,22 +86,29 @@
     (reset! on? false)))
 
 (defn level!
-  "A level is loading: li < 0 is the title. Takes effect at the next pattern
-   boundary, which undertone turns into a seamless transition."
-  [li theme boss?]
+  "A level is loading: li < 0 is the title. lives is the sparks left, so a
+   level begun on the last spark starts tense. Takes effect at the next
+   pattern boundary, which undertone turns into a seamless transition."
+  [li theme boss? lives]
   (when @on?
     (reset! quiet? (neg? li))
+    (reset! base-tension (if boss? 0.6 0.1))
+    (reset! last-spark? (= 1 lives))
     (reset! score-state (if (neg? li)
                           [:aurora 1 0 0.0]
-                          [(get theme-mood theme :aurora) (inc li) (quot li 3) (if boss? 0.6 0.1)]))
+                          [(get theme-mood theme :aurora) (inc li) (quot li 3) (tension-now)]))
     (push-score!)))
 
-(defn tension!
-  "Raise or ease the current level's tension (0..1), e.g. on the last spark."
-  [t]
-  (when (and @on? @score-state (not= t (nth @score-state 3)))
-    (swap! score-state assoc 3 t)
-    (push-score!)))
+(defn lives!
+  "The sparks left changed: the last one lifts the level's tension. Not on
+   the title, whose attract demo loses sparks too."
+  [n]
+  (when (and @on? (not @quiet?) @score-state)
+    (reset! last-spark? (= 1 n))
+    (let [t (tension-now)]
+      (when (not= t (nth @score-state 3))
+        (swap! score-state assoc 3 t)
+        (push-score!)))))
 
 (defn- shot!
   "Fire one trigger map, dropping repeats of the same shot inside gap ms so a
