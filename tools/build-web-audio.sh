@@ -17,8 +17,9 @@ UNDERTONE="${UNDERTONE:-$here/../let-go-undertone-tesserae-sfx}"
 out="${1:-$here/dist/web}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-shell="$(mktemp -t tess-shell).html"
-trap 'rm -f "$shell"' EXIT
+tmp="$(mktemp -d -t tess-shell)"
+trap 'rm -rf "$tmp"' EXIT
+shell="$tmp/shell.html"
 sed 's|</body>|  <script src="audiolab.js"></script>\n  <script src="undertone-bridge.js"></script>\n</body>|' "$here/web/shell.html" > "$shell"
 TESS_WEB_SHELL="$shell" "$here/tools/build-web.sh" "$out"
 echo "building undertone-bridge.wasm ..."
