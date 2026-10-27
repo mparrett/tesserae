@@ -59,3 +59,24 @@
         click {:x 5 :y 3 :button :left :action :press}]
     (is (= [:mouse move] (in/parse move)) "1003 motion arrives as a :none press")
     (is (= [:mouse click] (in/parse click)))))
+
+(deftest touch-pad-in-the-browser
+  (binding [in/*in-wasm* true]
+    (reset! in/kitty? false)
+    (reset! in/held {})
+    (let [p (in/parse (str E "[1;1:1D"))]
+      (testing "a pad arrow is evented but leaves the keyboard's hold model alone"
+        (is (= [:left :press] p))
+        (is (:evented? (meta p)))
+        (is (false? @in/kitty?))
+        (is (not (:evented? (meta (in/parse (str E "[D")))))))
+      (testing "held until its release"
+        (in/hold! :left :press true 0)
+        (is (= :down (get @in/held :left)))
+        (in/hold! :left :press false 10)
+        (is (= :down (get @in/held :left)) "a keyboard tap doesn't cut the pad's hold short")
+        (in/hold! :left :release true 20)
+        (is (nil? (get @in/held :left))))
+      (testing "the keyboard keeps its timed holds"
+        (in/hold! :right :press false 100)
+        (is (number? (get @in/held :right)))))))
