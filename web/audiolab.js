@@ -58,7 +58,7 @@
     if (!s || !s.started) return;
     if (s.queueMs !== lastQueue) { base = s.underruns; lastQueue = s.queueMs; }
     const out = actx ? Math.round(1000 * (actx.outputLatency || actx.baseLatency || 0)) : '?';
-    $('#al-stat').innerHTML = `queue ${s.queueMs || '80 (default)'} ms · queued ${s.queuedMs} ms · ` +
+    $('#al-stat').innerHTML = `queue ${s.queueMs ? s.queueMs + ' ms' : 'default'} · queued ${s.queuedMs} ms · ` +
       `<span style="color:${s.underruns > base ? '#ff7a6a' : 'inherit'}">underruns ${s.underruns - base}</span>` +
       ` · output ${out} ms`;
   }, 250);
