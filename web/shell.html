@@ -172,27 +172,29 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   // refused key, and every key after it, pad or keyboard, waits here and is
   // retried in order, on a timer so a release refused as the tab hides still
   // goes out. If nothing gets through for 2 s (a stalled VM), the waiting
-  // presses and plain keys are dropped; releases never are. Mouse reports
-  // skip the queue: one is tried once and dropped if refused or if keys are
-  // waiting, since the next report replaces it. A key longer than a ring slot
-  // can never fit and is dropped at once (as of 2026-10-27 let-go's lg-host-core.js holds 8 keys
-  // of up to 16 bytes, CAPACITY and MAX_KEY_LEN).
+  // keys are dropped except releases. Mouse motion skips the queue: a report
+  // is tried once and dropped if refused or if keys are waiting, since the
+  // next one replaces it; clicks queue like keys. A key longer than a ring
+  // slot can never fit and is dropped at once (as of 2026-10-27 let-go's
+  // lg-host-core.js holds 8 keys of up to 16 bytes, CAPACITY and MAX_KEY_LEN).
   const SLOT_BYTES = 16;
-  const isRelease = (s) => /^\x1b\[1;1:3[A-D]$/.test(s);
-  const backlog = [];
+  const enc = new TextEncoder();
+  const backlog = [];   // {s, release}
   let since = 0;
   const drain = () => {
-    while (backlog.length && sendKey(backlog[0])) { backlog.shift(); since = performance.now(); }
+    while (backlog.length && sendKey(backlog[0].s)) { backlog.shift(); since = performance.now(); }
     if (backlog.length && performance.now() - since > 2000) {
-      backlog.splice(0, backlog.length, ...backlog.filter(isRelease));
+      backlog.splice(0, backlog.length, ...backlog.filter((q) => q.release));
       since = performance.now();
     }
     if (backlog.length) setTimeout(drain, 16);
   };
-  const send = (s) => {
-    if (!sendKey || new TextEncoder().encode(s).length > SLOT_BYTES) return;
-    if (s.startsWith('\x1b[<')) { if (!backlog.length) sendKey(s); return; }
-    backlog.push(s);
+  // SGR mouse report: CSI < button ; x ; y M|m, with 32 in button for motion.
+  const isMotion = (s) => { const m = /^\x1b\[<(\d+);/.exec(s); return !!m && (m[1] & 32) !== 0; };
+  const send = (s, release = false) => {
+    if (!sendKey || enc.encode(s).length > SLOT_BYTES) return;
+    if (isMotion(s)) { if (!backlog.length) sendKey(s); return; }
+    backlog.push({s, release});
     if (backlog.length === 1) { since = performance.now(); drain(); }
   };
   const padParam = new URLSearchParams(location.search).get('pad');
@@ -208,7 +210,7 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
       if (e?.pointerId !== undefined) fingers.delete(e.pointerId); else fingers.clear();
       if (fingers.size || !b.classList.contains('on')) return;
       b.classList.remove('on');
-      if (hold) { send(`\x1b[1;1:3${k}`); releases.delete(up); }
+      if (hold) { send(`\x1b[1;1:3${k}`, true); releases.delete(up); }
     };
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();               // keep focus (and the OS keyboard) where it is
@@ -264,7 +266,7 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
       window.LetGoHost.setSize(term.cols, term.rows);
       term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
       sendKey = (s) => window.LetGoHost.sendInput(s);
-      term.onData(send);
+      term.onData((data) => send(data));
     }
   });
 })();
