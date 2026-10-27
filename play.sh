@@ -4,4 +4,4 @@
 # (default "tesserae": ~/.config/let-go/storage/k-dGVzc2VyYWU/ on Linux).
 here="$(cd "$(dirname "$0")" && pwd)"
 LG="${LG:-$here/tools/lg-pinned}"
-cd "$here" && exec "$LG" -storage-id "${TESS_STORAGE_ID:-tesserae}" -source-paths "${TESS_SOURCE_PATHS:-.}" main.lg "$@"
+cd "$here" && exec "$LG" -storage-id "${TESS_STORAGE_ID:-tesserae}" -source-paths . main.lg "$@"
