@@ -172,9 +172,10 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   // refused key, and every key after it, pad or keyboard, waits here and is
   // retried in order, on a timer so a release refused as the tab hides still
   // goes out. If nothing gets through for 2 s (a stalled VM), the waiting
-  // presses and plain keys are dropped; releases never are, and a key's
-  // release is queued once. A key longer than a ring slot can never fit and is
-  // dropped at once (as of 2026-10-27 let-go's lg-host-core.js holds 8 keys
+  // presses and plain keys are dropped; releases never are. Mouse reports
+  // skip the queue: one is tried once and dropped if refused or if keys are
+  // waiting, since the next report replaces it. A key longer than a ring slot
+  // can never fit and is dropped at once (as of 2026-10-27 let-go's lg-host-core.js holds 8 keys
   // of up to 16 bytes, CAPACITY and MAX_KEY_LEN).
   const SLOT_BYTES = 16;
   const isRelease = (s) => /^\x1b\[1;1:3[A-D]$/.test(s);
@@ -190,7 +191,7 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   };
   const send = (s) => {
     if (!sendKey || new TextEncoder().encode(s).length > SLOT_BYTES) return;
-    if (isRelease(s) && backlog.includes(s)) return;
+    if (s.startsWith('\x1b[<')) { if (!backlog.length) sendKey(s); return; }
     backlog.push(s);
     if (backlog.length === 1) { since = performance.now(); drain(); }
   };
@@ -211,7 +212,9 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     };
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();               // keep focus (and the OS keyboard) where it is
-      try { b.setPointerCapture(e.pointerId); } catch {}  // a pointer already gone can't be captured
+      // A pointer already gone can't be captured, and its up would never
+      // reach this button; ignore it rather than hold a key no lift releases.
+      try { b.setPointerCapture(e.pointerId); } catch { return; }
       fingers.add(e.pointerId);
       if (fingers.size > 1) return;
       b.classList.add('on');
