@@ -8,6 +8,9 @@
    2. fallback hold model: a fresh press holds the key for FRESH-MS (a short
       nudge), an auto-repeat (same key again within REPEAT-WINDOW) extends it by
       REPEAT-MS. Switches off for good the first time a kitty release arrives.
+      In the browser, xterm.js never speaks kitty, so a kitty event there is
+      the touch pad's (web/shell.html): it holds just that key, and the
+      keyboard stays on the fallback model.
    3. mouse any-motion (1003 + SGR 1006): absolute paddle x, click = action."
   (:require [term] [clojure.string]))
 
@@ -41,7 +44,8 @@
     (if (and (> n 32) (< n 127)) (keyword (clojure.string/lower-case (str (char n)))) nil)))
 
 (defn parse
-  "Raw read-key token -> [key event] with event in #{:press :repeat :release}."
+  "Raw read-key token -> [key event] with event in #{:press :repeat :release}.
+   A token that carried a kitty event field has {:evented? true} as metadata."
   [s]
   (cond
     (map? s) [:mouse s]
@@ -65,8 +69,8 @@
                   "u" (code->key (if (= a "") 0 (parse-long a)))
                   "~" nil
                   nil)]
-          (when (or ev (= fin "u")) (reset! kitty? true))
-          (when k [k event]))))
+          (when (and (or ev (= fin "u")) (not *in-wasm*)) (reset! kitty? true))
+          (when k (with-meta [k event] {:evented? (some? ev)})))))
     (= 1 (count s)) (let [c (int (first s))]
                       (when-let [k (code->key c)] [k :press]))
     :else nil))
@@ -84,6 +88,23 @@
       (reset! last-size sz)
       (if (and prev (not= sz prev)) [[:resize :press]] []))
     []))
+
+(defn hold!
+  "Update the held-key model for key k's event ev at time t. An evented key
+   (kitty, or the browser touch pad) is held until its release; otherwise a
+   press holds for FRESH-MS, or REPEAT-MS when it follows within
+   REPEAT-WINDOW. A plain press leaves a key the pad holds alone, so a
+   keyboard tap can't cut the pad's hold short."
+  [k ev evented? t]
+  (cond
+    (or @kitty? evented?)
+    (swap! held (fn [h] (if (= ev :release) (dissoc h k) (assoc h k :down))))
+    (= :down (get @held k)) nil
+    :else
+    (let [lp (get @last-press k -10000)
+          rep? (< (- t lp) REPEAT-WINDOW)]
+      (swap! last-press assoc k t)
+      (swap! held assoc k (+ t (if rep? REPEAT-MS FRESH-MS))))))
 
 (defn poll!
   "Drain pending input. Returns a vector of discrete events [key event] and
@@ -103,12 +124,7 @@
                        (conj evs [:click :press]) evs)))
             :else
             (let [[k ev] p]
-              (if @kitty?
-                (swap! held (fn [h] (if (= ev :release) (dissoc h k) (assoc h k :down))))
-                (let [lp (get @last-press k -10000)
-                      rep? (< (- t lp) REPEAT-WINDOW)]
-                  (swap! last-press assoc k t)
-                  (swap! held assoc k (+ t (if rep? REPEAT-MS FRESH-MS)))))
+              (hold! k ev (:evented? (meta p)) t)
               (recur (if (= ev :release) evs (conj evs [k ev]))))))
         evs))))
 
