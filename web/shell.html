@@ -167,6 +167,20 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
   // holds for exactly as long as the finger is down; repeats timed from this
   // thread would lapse whenever a frame keeps it busy. Other keys are plain.
   let sendKey = null;
+  // The host's input ring drops a key when it is full (sendInput returns
+  // false). A dropped release would hold the arrow until its next press, so
+  // a refused key, and every key after it, waits here and is retried in order
+  // each frame.
+  const backlog = [];
+  const drain = () => {
+    while (backlog.length && sendKey(backlog[0])) backlog.shift();
+    if (backlog.length) requestAnimationFrame(drain);
+  };
+  const send = (s) => {
+    if (!sendKey) return;
+    backlog.push(s);
+    if (backlog.length === 1) drain();
+  };
   const padParam = new URLSearchParams(location.search).get('pad');
   const padOn = padParam === 'on' || (padParam !== 'off' && matchMedia('(pointer: coarse)').matches);
   document.body.classList.toggle('pad', padOn);
@@ -176,14 +190,14 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     const up = () => {
       if (!b.classList.contains('on')) return;
       b.classList.remove('on');
-      if (hold) { sendKey?.(`\x1b[1;1:3${k}`); releases.delete(up); }
+      if (hold) { send(`\x1b[1;1:3${k}`); releases.delete(up); }
     };
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();               // keep focus (and the OS keyboard) where it is
       b.setPointerCapture(e.pointerId);
       b.classList.add('on');
-      if (hold) { sendKey?.(`\x1b[1;1:1${k}`); releases.add(up); }
-      else sendKey?.(k === 'ESC' ? '\x1b' : k);
+      if (hold) { send(`\x1b[1;1:1${k}`); releases.add(up); }
+      else send(k === 'ESC' ? '\x1b' : k);
     });
     for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, up);
     b.addEventListener('contextmenu', (e) => e.preventDefault());
