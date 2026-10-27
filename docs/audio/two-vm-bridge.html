@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two-VM Audio Bridge</title>
+<style>
+:root {
+  --bg: #f7f5f0; --fg: #1f1d1a; --muted: #6b665d; --card: #ffffff; --line: #d9d3c7;
+  --worker: #3b6ea8; --worker-bg: #e8f0fa; --page: #9a5b1e; --page-bg: #fbefe1;
+  --wire: #6b3fa0; --code-bg: #efebe3; --warn: #a33b2b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17181a; --fg: #e8e6e1; --muted: #9a968e; --card: #202225; --line: #3a3c40;
+    --worker: #7fb0e8; --worker-bg: #1c2a3b; --page: #e0a467; --page-bg: #352717;
+    --wire: #b994e6; --code-bg: #2a2c30; --warn: #e88a7a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #17181a; --fg: #e8e6e1; --muted: #9a968e; --card: #202225; --line: #3a3c40;
+  --worker: #7fb0e8; --worker-bg: #1c2a3b; --page: #e0a467; --page-bg: #352717;
+  --wire: #b994e6; --code-bg: #2a2c30; --warn: #e88a7a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.7rem; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.15rem; margin: 36px 0 10px; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto;
+  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre code { background: none; padding: 0; }
+
+.diagram { display: grid; grid-template-columns: 1fr 64px 1fr; gap: 0; align-items: stretch; margin: 18px 0 8px; }
+.lane { border-radius: 10px; padding: 14px; border: 2px solid; }
+.lane h3 { margin: 0 0 10px; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.lane.worker { border-color: var(--worker); background: var(--worker-bg); }
+.lane.worker h3 { color: var(--worker); }
+.lane.page { border-color: var(--page); background: var(--page-bg); }
+.lane.page h3 { color: var(--page); }
+.box { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
+  margin-bottom: 8px; font-size: 0.9rem; }
+.box b { display: block; font-size: 0.92rem; }
+.box small { color: var(--muted); }
+.box.vm { border-left: 4px solid currentColor; }
+.worker .box.vm { color: var(--worker); } .page .box.vm { color: var(--page); }
+.box.vm > * { color: var(--fg); } .box.vm small { color: var(--muted); }
+.down { text-align: center; color: var(--muted); font-size: 0.8rem; margin: -2px 0 6px; }
+.gap { display: flex; flex-direction: column; justify-content: center; align-items: center;
+  color: var(--wire); font-size: 0.75rem; text-align: center; }
+.gap .arrow { font-size: 1.8rem; line-height: 1; }
+.legend { color: var(--muted); font-size: 0.85rem; }
+
+ol.flow { padding-left: 22px; } ol.flow li { margin-bottom: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.card h4 { margin: 0 0 6px; font-size: 0.95rem; }
+.card ul { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.card.cost h4 { color: var(--warn); }
+.note { color: var(--muted); font-size: 0.85rem; }
+
+@media (max-width: 640px) {
+  .diagram { grid-template-columns: 1fr; }
+  .gap { flex-direction: row; gap: 8px; padding: 8px 0; }
+  .gap .arrow { transform: rotate(90deg); }
+  .cards { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>The two-VM audio bridge</h1>
+<p class="sub">How tesserae's browser build plays undertone today: the game's lg VM in a worker sends commands, and a second lg VM on the page plays them. Spike of 2026-10-14, branch <code>spike/undertone-audio</code>.</p>
+
+<h2>The problem</h2>
+<p><code>lg -w</code> runs the game in a Web Worker so it can block on keys without freezing the page. A worker has no <code>AudioContext</code>, so the game can't open WebAudio itself. Something on the main thread has to own the audio device.</p>
+
+<h2>The shape</h2>
+<div class="diagram">
+  <div class="lane worker">
+    <h3>Web Worker</h3>
+    <div class="box vm"><b>lg VM #1: the game</b><small>stock <code>lg -w</code> bundle, no undertone linked</small></div>
+    <div class="down">↓</div>
+    <div class="box"><b><code>tesserae.sfx</code></b><small>backend <code>:bridge</code> (no <code>audio/trigger</code>, but <code>*in-wasm*</code>)</small></div>
+    <div class="down">↓</div>
+    <div class="box"><b><code>js/emit "undertone"</code></b><small><code>{:form (pr-str cmd)}</code>, an EDN string</small></div>
+  </div>
+  <div class="gap"><span class="arrow">→</span>let-go host relays as a window <code>CustomEvent</code></div>
+  <div class="lane page">
+    <h3>Main thread</h3>
+    <div class="box"><b><code>undertone-bridge.js</code></b><small>buffers early events, loads the bridge wasm, replays</small></div>
+    <div class="down">↓</div>
+    <div class="box vm"><b>lg VM #2: the bridge</b><small>Go wasm with <code>audio</code> natives, embedded <code>ambience</code>, and <code>undertone.bridge/handle!</code></small></div>
+    <div class="down">↓</div>
+    <div class="box"><b>undertone engine → <code>webaudio</code></b><small>AudioContext + worklet, started on first gesture</small></div>
+    <div class="down">↓</div>
+    <div class="box"><b>🔊 speakers</b></div>
+  </div>
+</div>
+<p class="legend">Only control-rate data crosses the gap: a parameter set every few seconds and the odd one-shot. PCM is produced entirely on the page.</p>
+
+<h2>One command, end to end</h2>
+<ol class="flow">
+  <li>A tile breaks. The game calls <code>(sfx/tile-broken! combo wx)</code>, which debounces and builds <code>{:shot :tink :degree 4 :gain 0.5 :pan 0.3}</code>.</li>
+  <li><code>sfx</code> sees backend <code>:bridge</code> and calls <code>(js/emit "undertone" {:form "[:trigger {...}]"})</code>.</li>
+  <li>let-go's wasm host receives the worker message and dispatches a <code>CustomEvent("undertone")</code> on <code>window</code>.</li>
+  <li>The bridge's Go listener checks <code>detail.form</code> is a string and pushes it onto a 256-deep channel. The handler never blocks the wasm scheduler; a burst past 256 drops.</li>
+  <li>A goroutine drains the channel: <code>c.Def</code> the string, then runs <code>(undertone.bridge/handle! (read-string ...))</code> in VM #2.</li>
+  <li><code>handle!</code> dispatches on the op and calls <code>audio/trigger</code>. The engine voices it into the ring the worklet reads.</li>
+</ol>
+
+<h2>Wire format</h2>
+<table>
+  <tr><th>Command</th><th>Bridge does</th><th>Sent by <code>sfx</code> when</th></tr>
+  <tr><td><code>[:score mood seed level tension]</code></td><td><code>ambience/derive-mood</code>, then <code>audio/set-parameters</code></td><td>a level loads, tension changes</td></tr>
+  <tr><td><code>[:params {...}]</code></td><td><code>audio/set-parameters</code></td><td>(available, unused)</td></tr>
+  <tr><td><code>[:trigger m]</code></td><td><code>audio/trigger</code></td><td>tile broken or cracked, wall struck, etc.</td></tr>
+  <tr><td><code>[:music-gain g]</code></td><td><code>audio/set-music-gain</code></td><td><code>start!</code></td></tr>
+</table>
+<p class="note">Sending <code>:score</code> rather than a derived parameter map is why the bridge carries <code>ambience</code>: the mood derivation runs on the page, so the worker's VM never needs undertone at all.</p>
+
+<h2>Details that made it work</h2>
+<ul>
+  <li><b>Early commands.</b> The bridge wasm is larger than the game and finishes loading after the game's first <code>:music-gain</code> and <code>:score</code>. The loader listens from page load, holds those events, and re-dispatches them once <code>window.undertoneBridge</code> exists.</li>
+  <li><b>Gesture unlock.</b> The bridge calls <code>m.Start()</code> at load, which blocks until the first gesture anywhere on the page. Creating the context inside a later handler misses that gesture. Triggers before then drop; score and gain updates stick.</li>
+  <li><b>Write-only.</b> Nothing flows back to the worker, so autoplay and replays stay deterministic. <code>undertoneBridge.stats()</code> exposes <code>{received, errors, started}</code> for tests only.</li>
+  <li><b>Same game code everywhere.</b> <code>sfx.lg</code> picks <code>:native</code> when the lg links undertone (<code>tools/play-audio.sh</code>), <code>:bridge</code> in wasm, and <code>nil</code> otherwise, where every call is a no-op.</li>
+  <li><b>Build.</b> <code>tools/build-web-audio.sh</code> runs the stock <code>build-web.sh</code> with a shell that has the loader script injected, builds <code>cmd/undertone-bridge</code> for <code>js/wasm</code>, and copies Go's <code>wasm_exec.js</code> beside it.</li>
+</ul>
+
+<h2>Trade-offs</h2>
+<div class="cards">
+  <div class="card">
+    <h4>Why it's attractive</h4>
+    <ul>
+      <li>No changes to let-go: <code>js/emit</code> and the worker host are stock.</li>
+      <li>The game bundle stays the stock one.</li>
+      <li>Tiny, text-only protocol that's easy to log and test.</li>
+      <li>Audio rendering never competes with the game's thread.</li>
+    </ul>
+  </div>
+  <div class="card cost">
+    <h4>What it costs</h4>
+    <ul>
+      <li>Two wasm runtimes and two lg VMs on one page. As of 2026-10-14 the bridge wasm was about 29 MB beside an about 9 MB game page.</li>
+      <li>A second Go runtime and <code>wasm_exec.js</code> to load and keep in step.</li>
+      <li>The early-event buffering dance.</li>
+      <li>EDN print and read on every command.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Where it went next</h2>
+<p>The follow-up spike (2026-10-15) collapses it to <b>one VM</b>: the game wasm links undertone itself (let-go <code>-import</code> from #1037, with <code>ambience</code> registered through #1064's <code>RegisterEmbeddedSource</code>). Undertone renders in the worker into a <code>SharedArrayBuffer</code> ring and posts it to the page, where a small <code>page.js</code> owns the <code>AudioContext</code> and worklet. That drops the second runtime and the EDN hop, at the cost of rendering on the game's thread. The fallback, if that cost shows up, is a plain-Go bridge with no lg VM on the page.</p>
+</main>
+</body>
+</html>

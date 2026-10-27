@@ -22,7 +22,7 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 cd "$here"
 t0=$(date +%s)
-"$here/tools/heavy.sh" "$LG" -w "$out" -w-shell "$here/web/shell.html" \
+"$here/tools/heavy.sh" "$LG" -w "$out" -w-shell "${TESS_WEB_SHELL:-$here/web/shell.html}" \
   -storage-id "${TESS_STORAGE_ID:-tesserae}" -source-paths . main.lg
 echo "built $out in $(( $(date +%s) - t0 ))s:"
 ls -la "$out" | sed 1d

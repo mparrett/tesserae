@@ -1,0 +1,152 @@
+(ns tesserae.sfx
+  "Ambience and one-shots through undertone's `audio` namespace, when the
+   runtime links it (audio-host/lg, run by tools/play-audio.sh). On a stock
+   lg there is no `audio` namespace, every call here is a no-op, and the game,
+   the tests, the sims and the browser build run exactly as before.
+
+   Write-only, like undertone's own surface: nothing here returns a value the
+   game could branch on, so autoplay and replays stay deterministic.
+
+   The score comes from undertone's `ambience/derive-mood`, required at
+   runtime only when audio exists (undertone registers that namespace's
+   source at init, so no source path is needed).
+
+   In the browser the game runs in a Web Worker, which can't open audio, so
+   the same commands go to the page as EDN over js/emit, where undertone's
+   bridge (cmd/undertone-bridge, added by tools/build-web-audio.sh) plays
+   them. Without the bridge on the page the events have no listener."
+  (:require [js]))
+
+(defn- native [sym] (when-let [v (resolve sym)] @v))
+
+;; :native when this lg links undertone, :bridge in a browser bundle, else nil.
+(def ^:private backend
+  (cond (native 'undertone/trigger) :native
+        *in-wasm* :bridge
+        :else nil))
+
+(defn- emit! [cmd] (js/emit "undertone" {:form (pr-str cmd)}))
+
+(defn- trigger* [m]
+  (case backend
+    :native ((native 'undertone/trigger) m)
+    :bridge (emit! [:trigger m])
+    nil))
+
+(def on? (atom false))
+
+;; The bed sits well under the one-shots by default: the sfx are the game's
+;; feedback, the music is room tone. --music-gain overrides (0..1).
+(def MUSIC-GAIN 0.3)
+(def ^:private quiet? (atom true))     ; the title's attract demo plays no sfx
+(def ^:private score-state (atom nil)) ; [mood seed level tension]
+(def ^:private base-tension (atom 0.0)) ; the level's own, before the last-spark lift
+(def ^:private last-spark? (atom false))
+
+;; On the last spark the score tightens on top of the level's own tension.
+(def LAST-SPARK-LIFT 0.4)
+
+(defn- tension-now []
+  (min 1.0 (+ @base-tension (if @last-spark? LAST-SPARK-LIFT 0.0))))
+(def ^:private last-ms (atom {}))      ; shot name -> ms it last fired
+
+(defn- now-ms [] (quot (System/nanoTime) 1000000))
+
+;; Chapter themes -> undertone moods. Seeded by level index, so a level keeps
+;; its music across retries.
+(def ^:private theme-mood
+  {:indigo :aurora :teal :meadow :umber :village :felt :overworld
+   :violet :aurora :crimson :dungeon :grout :dungeon :orrery :overworld})
+
+(defn- push-score! []
+  (when-let [[mood seed level tension :as sc] @score-state]
+    (case backend
+      :native ((native 'undertone/set-parameters)
+               ((native 'undertone.ambience/derive-mood) mood seed level tension))
+      :bridge (emit! (into [:score] sc))
+      nil)))
+
+(defn start!
+  "Begin the music bed. o is the game's option map; :mute keeps it all off."
+  [o]
+  (when (and backend (not (:mute o)))
+    (reset! on? true)
+    (let [g (double (get o :music-gain MUSIC-GAIN))]
+      (case backend
+        :native (do (require 'undertone.ambience) ((native 'undertone/set-music-gain) g))
+        :bridge (emit! [:music-gain g])))
+    (reset! score-state [:aurora 1 0 0.0])
+    (push-score!)
+    ;; the bridge opens its own device at page load and starts on a gesture
+    (when (= backend :native) ((native 'undertone/music-start)))))
+
+(defn stop! []
+  (when @on?
+    (when (= backend :native) ((native 'undertone/music-stop)))
+    (reset! on? false)))
+
+(defn level!
+  "A level is loading: li < 0 is the title. lives is the sparks left, so a
+   level begun on the last spark starts tense. Takes effect at the next
+   pattern boundary, which undertone turns into a seamless transition."
+  [li theme boss? lives]
+  (when @on?
+    (reset! quiet? (neg? li))
+    (reset! base-tension (if boss? 0.6 0.1))
+    (reset! last-spark? (= 1 lives))
+    (reset! score-state (if (neg? li)
+                          [:aurora 1 0 0.0]
+                          [(get theme-mood theme :aurora) (inc li) (quot li 3) (tension-now)]))
+    (push-score!)))
+
+(defn lives!
+  "The sparks left changed: the last one lifts the level's tension. Not on
+   the title, whose attract demo loses sparks too."
+  [n]
+  (when (and @on? (not @quiet?) @score-state)
+    (reset! last-spark? (= 1 n))
+    (let [t (tension-now)]
+      (when (not= t (nth @score-state 3))
+        (swap! score-state assoc 3 t)
+        (push-score!)))))
+
+(defn- shot!
+  "Fire one trigger map, dropping repeats of the same shot inside gap ms so a
+   cascade of hits in one physics frame doesn't flood the 8-voice pool."
+  [m gap]
+  (when (and @on? (not @quiet?))
+    (let [k (:shot m) t (now-ms)]
+      (when (>= (- t (get @last-ms k -100000)) gap)
+        (swap! last-ms assoc k t)
+        (trigger* m)))))
+
+(defn- pan [wx] (max 0.0 (min 1.0 (/ (double wx) 48.0))))
+
+;; ---- the game's vocabulary: what happened, never how it sounds ----
+
+(defn tile-broken!
+  "Each break in a combo climbs the scale, so a long rally plays a phrase."
+  [combo wx]
+  (shot! {:shot :tink :degree (min 14 combo) :octave 0 :gain 0.5 :pan (pan wx)} 25))
+
+(defn tile-cracked! [wx] (shot! {:shot :hit :gain 0.3 :pan (pan wx)} 40))
+
+(defn wall-struck! [wx] (shot! {:shot :thunk :gain 0.18 :pan (pan wx)} 70))
+
+(defn trowel-bounced! [px] (shot! {:shot :blip :degree 0 :octave -1 :gain 0.45 :pan (pan px)} 30))
+
+(defn launched! [] (shot! {:shot :zap :degree 4 :octave 0 :gain 0.4} 60))
+
+(defn spark-lost! [] (shot! {:shot :fall :degree 0 :octave 0 :gain 0.55} 200))
+
+(defn game-over! []
+  (shot! {:shot :fall :degree 0 :octave -1 :gain 0.6} 0)
+  (shot! {:shot :thud :gain 0.6 :delay-ms 450} 0))
+
+(defn level-won!
+  "A rising arpeggio in the level's key, timed by the engine (delay-ms), not
+   by the frame loop."
+  []
+  (when (and @on? (not @quiet?))
+    (trigger* (vec (map-indexed (fn [i d] {:shot :tink :degree d :octave 0 :gain 0.55 :delay-ms (* 110 i)})
+                                [0 2 4 7])))))
