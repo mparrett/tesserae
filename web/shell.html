@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
   <title>TESSERAE</title>
   <!-- lg -w -w-shell template: let-go's default xterm shell, plus the largest
        font that fits the game's 76x24 layout (k=1, as in a terminal), and the
@@ -11,11 +12,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;height:100dvh;background:#000;color:#e8e6df;overflow:hidden}
+    html,body{height:100%;height:100dvh;background:#000;color:#e8e6df;overflow:hidden;color-scheme:dark}
     /* Breathing room from the browser chrome. On body, not #app: FitAddon reads
        the parent's height as-is, so padding there would overflow the grid. */
-    body{display:flex;flex-direction:column;padding:clamp(12px,4vh,48px) clamp(12px,3vw,48px)}
-    #app{flex:1;min-height:0}
+    body{display:flex;flex-direction:column;
+         padding:max(clamp(12px,4vh,48px),env(safe-area-inset-top)) max(clamp(12px,3vw,48px),env(safe-area-inset-right))
+                 max(clamp(12px,4vh,48px),env(safe-area-inset-bottom)) max(clamp(12px,3vw,48px),env(safe-area-inset-left))}
+    #app{flex:1;min-height:0;min-width:0}
     .xterm{height:100%}
     /* scrollback is 0, so there's nothing to scroll; xterm's overflow-y:scroll
        still draws an empty track wherever scrollbars are classic (Windows, macOS with a mouse). */
@@ -43,6 +46,19 @@
 @font-face { font-family: 'Tess Fax'; font-style: normal; font-weight: 400; font-display: block;
   src: url(data:font/woff2;base64,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) format('woff2'); }
 /* tess-font:end */
+    /* Touch pad, shown on a coarse pointer (or ?pad=on). Below the terminal when
+       upright, where width already sets the font; down the right side in
+       landscape, where height does. */
+    #pad{display:none;gap:8px;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none}
+    body.pad #pad{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:52px;padding-top:10px}
+    #pad button{font:600 18px/1 monospace;color:#c8c6bf;background:#14141a;border:1px solid #34343c;
+                border-radius:10px;touch-action:none}
+    #pad button.on{background:#2c2c38;border-color:#6a6a78;color:#fff}
+    #pad .wide{grid-column:span 2}
+    @media (orientation: landscape) {
+      body.pad{flex-direction:row}
+      body.pad #pad{grid-template-columns:repeat(2,56px);grid-auto-rows:48px;align-content:center;padding:0 0 0 10px}
+    }
     #status{color:#5a584f;font-family:monospace;font-size:13px;padding:1rem;position:absolute;
             top:50%;left:50%;transform:translate(-50%,-50%)}
   </style>
@@ -50,6 +66,15 @@
 <body>
   <div id="status">loading TESSERAE...</div>
   <div id="app"></div>
+  <div id="pad">
+    <button data-key="D" data-hold>&#9664;</button>
+    <button data-key="A" data-hold>&#9650;</button>
+    <button data-key="B" data-hold>&#9660;</button>
+    <button data-key="C" data-hold>&#9654;</button>
+    <button data-key="ESC">ESC</button>
+    <button data-key="p">P</button>
+    <button data-key=" " class="wide">SPACE</button>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
@@ -137,6 +162,37 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     requestAnimationFrame(() => { layoutQueued = false; layout(); });
   }
 
+  // The pad types into the VM as a terminal would. An arrow sends kitty-style
+  // press and release (CSI 1;1:1 D, CSI 1;1:3 D), which tesserae/input.lg
+  // holds for exactly as long as the finger is down; repeats timed from this
+  // thread would lapse whenever a frame keeps it busy. Other keys are plain.
+  let sendKey = null;
+  const padParam = new URLSearchParams(location.search).get('pad');
+  const padOn = padParam === 'on' || (padParam !== 'off' && matchMedia('(pointer: coarse)').matches);
+  document.body.classList.toggle('pad', padOn);
+  const releases = new Set();
+  for (const b of document.querySelectorAll('#pad button')) {
+    const k = b.dataset.key, hold = 'hold' in b.dataset;
+    const up = () => {
+      if (!b.classList.contains('on')) return;
+      b.classList.remove('on');
+      if (hold) { sendKey?.(`\x1b[1;1:3${k}`); releases.delete(up); }
+    };
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();               // keep focus (and the OS keyboard) where it is
+      b.setPointerCapture(e.pointerId);
+      b.classList.add('on');
+      if (hold) { sendKey?.(`\x1b[1;1:1${k}`); releases.add(up); }
+      else sendKey?.(k === 'ESC' ? '\x1b' : k);
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, up);
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+  // A release that never arrives would hold the key until the next press.
+  const releaseAll = () => { for (const up of [...releases]) up(); };
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', releaseAll);
+
   window.LetGoHost.onReady(async (mode) => {
     // Hold output until the terminal is open, so nothing written during the
     // font wait below is lost.
@@ -161,6 +217,10 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
     layout();
     term.focus();
     window.addEventListener('resize', queueLayout);
+    // Mobile browsers can report a rotation or a toolbar showing before the
+    // window's size settles; the visual viewport follows it.
+    window.visualViewport?.addEventListener('resize', queueLayout);
+    window.addEventListener('orientationchange', queueLayout);
     window._tessTerm = term;
     opened = true;
     if (pending) { term.write(pending); pending = ''; }
@@ -168,6 +228,7 @@ __LG_HOST_JS_BODY_PLACEHOLDER__
       window.LetGoHost.setSize(term.cols, term.rows);
       term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
       term.onData((data) => window.LetGoHost.sendInput(data));
+      sendKey = (s) => window.LetGoHost.sendInput(s);
     }
   });
 })();
