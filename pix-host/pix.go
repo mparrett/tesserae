@@ -22,7 +22,8 @@ import (
 //   (pix/close!)            close the window
 //   (pix/events)            window input since the last call (input.go)
 //   (pix/open-arena! S)     open the window for an S-px arena and its panel
-//   (pix/panel! ...), (pix/card! ...)  text beside and over the arena (text.go)
+//   (pix/text! ...), (pix/panel! ...), (pix/card! ...)  type over and beside
+//                            the arena (text.go)
 //   (pix/present-arena! ...) the game's arena, composed here from its own
 //                            buffers (arena.go); opens the window on first use
 //
@@ -41,6 +42,7 @@ var (
 
 	mu     sync.Mutex
 	frame  []byte
+	light  []byte // nil when the frame came from present!
 	fw, fh int
 	fresh  bool
 
@@ -52,6 +54,8 @@ var (
 type game struct {
 	up      chan struct{}
 	img     *ebiten.Image
+	light   *ebiten.Image
+	fx      fx
 	snapped bool
 }
 
@@ -75,6 +79,7 @@ func (g *game) Update() error {
 		return ebiten.Termination
 	}
 	pollInput()
+	fxKeys()
 	return nil
 }
 
@@ -85,6 +90,13 @@ func (g *game) Draw(screen *ebiten.Image) {
 			g.img = ebiten.NewImage(fw, fh)
 		}
 		g.img.WritePixels(frame)
+		if len(light) == fw*fh*4 {
+			g.light = sized(g.light, fw, fh)
+			g.light.WritePixels(light)
+		} else if g.light != nil {
+			g.light.Deallocate()
+			g.light = nil
+		}
 		fresh = false
 	}
 	mu.Unlock()
@@ -105,13 +117,11 @@ func (g *game) Draw(screen *ebiten.Image) {
 	k := max(1, min(aw/iw, sh/ih))
 	ox, oy := (aw-iw*k)/2, (sh-ih*k)/2
 	if g.img != nil {
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Scale(float64(k), float64(k))
-		op.GeoM.Translate(float64(ox), float64(oy))
 		setView(ox, oy, k, iw, ih)
-		screen.DrawImage(g.img, op)
+		g.fx.drawArena(screen, g.img, g.light, ox, oy, k)
 	}
 	drawOverlay(screen, ox, oy, k, iw, ih, px)
+	drawNote(screen)
 	if snapshot != "" && ticks >= snapshotAt && !g.snapped {
 		g.snapped = true
 		saveSnapshot(screen)
@@ -171,7 +181,7 @@ func installPix() {
 		if len(px) < w*h*4 {
 			return vm.NIL, fmt.Errorf("pix/present!: %d bytes is short of %dx%d RGBA", len(px), w, h)
 		}
-		setFrame(px, w, h)
+		setFrame(px, nil, w, h)
 		return vm.NIL, nil
 	}))
 	ns.Def("closed?", native("closed?", 0, func([]vm.Value) (vm.Value, error) {
@@ -179,6 +189,7 @@ func installPix() {
 	}))
 	ns.Def("events", native("events", 0, drainEvents))
 	ns.Def("panel!", native("panel!", 2, setPanel))
+	ns.Def("text!", native("text!", 4, addText))
 	ns.Def("card!", native("card!", 4, setCard))
 	ns.Def("open-arena!", native("open-arena!", 1, func(a []vm.Value) (vm.Value, error) {
 		return vm.Boolean(isOpen.Load() || openArena(toInt(a[0]))), nil
@@ -199,14 +210,18 @@ func openWindow(w, h int, title string) bool {
 	return !closed.Load()
 }
 
-// setFrame hands a finished RGBA frame to Draw.
-func setFrame(px []byte, w, h int) {
+// setFrame hands a finished RGBA frame, and its light for bloom (or nil), to Draw.
+func setFrame(px, lt []byte, w, h int) {
 	mu.Lock()
 	if cap(frame) < w*h*4 {
 		frame = make([]byte, w*h*4)
 	}
 	frame = frame[:w*h*4]
 	copy(frame, px)
+	light = light[:0]
+	if lt != nil {
+		light = append(light, lt[:w*h*4]...)
+	}
 	fw, fh, fresh = w, h, true
 	mu.Unlock()
 }

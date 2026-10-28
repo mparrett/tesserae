@@ -17,10 +17,11 @@ import (
 // clears what compose! clears as it goes (light, overlay, text and sprite
 // cells, dirty marks), so the next frame starts clean.
 var arenaArgs = []string{"S", "k", "cos", "sin", "ident?", "outside",
-	"ovr", "wcache", "acc-r", "acc-g", "acc-b", "tglyph", "smask", "mark", "rmark", "tcol"}
+	"ovr", "wcache", "acc-r", "acc-g", "acc-b", "tglyph", "smask", "mark", "rmark"}
 
 var (
 	rgba     []byte
+	lightPx  []byte // the frame's light alone, clamped, for bloom
 	postLUT  = makePostLUT()
 	stats    []time.Duration // Go time per frame
 	gaps     []time.Duration // between frames
@@ -46,6 +47,10 @@ func post8(v float64) byte {
 		return postLUT[0]
 	}
 	return postLUT[int(v)]
+}
+
+func clamp8(v float64) byte {
+	return byte(min(255, max(0, v)))
 }
 
 func presentArena(a []vm.Value) (vm.Value, error) {
@@ -96,9 +101,13 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 	}
 
 	if cap(rgba) < npx*4 {
-		rgba = make([]byte, npx*4)
+		rgba, lightPx = make([]byte, npx*4), make([]byte, npx*4)
 	}
-	rgba = rgba[:npx*4]
+	rgba, lightPx = rgba[:npx*4], lightPx[:npx*4]
+	post := post8
+	if !posterOn.Load() {
+		post = clamp8
+	}
 	kf, kinv := float64(k), 1/float64(k)
 	for y := range S {
 		Y := (float64(y)+0.5)*kinv - 24
@@ -119,10 +128,14 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 				}
 			}
 			r, g, b := byte(base>>16), byte(base>>8), byte(base)
-			if lr, lg, lb := ar[i], ag[i], ab[i]; lr != 0 || lg != 0 || lb != 0 {
-				r, g, b = post8(float64(r)+lr), post8(float64(g)+lg), post8(float64(b)+lb)
-			}
 			o := i * 4
+			if lr, lg, lb := ar[i], ag[i], ab[i]; lr != 0 || lg != 0 || lb != 0 {
+				r, g, b = post(float64(r)+lr), post(float64(g)+lg), post(float64(b)+lb)
+				lightPx[o], lightPx[o+1], lightPx[o+2] = clamp8(lr), clamp8(lg), clamp8(lb)
+			} else {
+				lightPx[o], lightPx[o+1], lightPx[o+2] = 0, 0, 0
+			}
+			lightPx[o+3] = 255
 			rgba[o], rgba[o+1], rgba[o+2], rgba[o+3] = r, g, b, 255
 		}
 	}
@@ -134,9 +147,6 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 	}
 	if ta, ok := a[11].(*vm.TypedArray); ok && ta.Kind() == vm.ArrayObject {
 		tg := ta.Unbox().([]vm.Value)
-		if tc, ok := a[15].(*vm.TypedArray); ok && tc.Kind() == vm.ArrayInt {
-			gatherRuns(tg, tc.Unbox().([]int64), S)
-		}
 		for i, v := range tg {
 			if v != vm.NIL && v != nil {
 				tg[i] = vm.NIL
@@ -152,7 +162,8 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 	if !isOpen.Load() && !openArena(S) {
 		return vm.TRUE, nil
 	}
-	setFrame(rgba, S, S)
+	flushText()
+	setFrame(rgba, lightPx, S, S)
 	stats = append(stats, time.Since(t0))
 	return vm.Boolean(closed.Load()), nil
 }
