@@ -66,35 +66,11 @@
 </head>
 <body>
   <script>
-  // The sound mode M picks: the game emits tesserae-sound when it changes, and
-  // its worker has no localStorage, so the page keeps it and hands it back as
-  // ?sound= before the game starts (the worker reads the URL at init). The URL
-  // follows each change, so a reload plays what was last chosen; the default,
-  // all, leaves no trace, and ?reset-progress forgets it with the rest. The
-  // pad's sound button stays hidden until the game says it has sound (start).
-  (() => {
-    const KEY = 'tesserae-sound';
-    const setURL = (mode) => {
-      const p = new URLSearchParams(location.search);
-      if (mode === 'all') p.delete('sound'); else p.set('sound', mode);
-      const q = p.toString();
-      history.replaceState(null, '', `${location.pathname}${q ? '?' + q : ''}${location.hash}`);
-    };
-    try {
-      const p = new URLSearchParams(location.search);
-      if (p.has('reset-progress')) localStorage.removeItem(KEY);
-      const saved = localStorage.getItem(KEY);
-      if (saved && !p.has('sound')) setURL(saved);
-    } catch {}
-    addEventListener('tesserae-sound', (e) => {
-      const mode = e.detail?.mode;
-      if (!mode) return;
-      document.querySelector('#pad button[data-key="m"]')?.removeAttribute('hidden');
-      if (e.detail.start) return;
-      setURL(mode);
-      try { if (mode === 'all') localStorage.removeItem(KEY); else localStorage.setItem(KEY, mode); } catch {}
-    });
-  })();
+  // The game says it has sound once, at start (tesserae-sound); until then the
+  // pad's sound button stays hidden and SPACE keeps its double width. The mode
+  // M picks is saved by the game itself, in its own browser storage.
+  addEventListener('tesserae-sound', () =>
+    document.querySelector('#pad button[data-key="m"]')?.removeAttribute('hidden'), { once: true });
   </script>
   <div id="status">loading TESSERAE...</div>
   <div id="app"></div>

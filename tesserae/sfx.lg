@@ -82,13 +82,10 @@
       nil)))
 
 (defn set-mode!
-  "Switch what plays (one of MODES). In the browser the page hears it too
-   (a tesserae-sound event) and keeps it for the next visit."
+  "Switch what plays (one of MODES)."
   [m]
   (reset! mode m)
-  (when @on?
-    (push-music-gain!)
-    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name m)}))))
+  (when @on? (push-music-gain!)))
 
 (defn cycle-mode!
   "The next of MODES, applied. Returns it."
@@ -107,8 +104,8 @@
     (when (= backend :native) (require 'undertone.ambience))
     (reset! mode (get o :sound :all))
     (push-music-gain!)
-    ;; tells the page there is sound (it shows the pad's sound button), not a choice to keep
-    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name @mode) :start true}))
+    ;; tells the page there is sound, so it shows the touch pad's sound button
+    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name @mode)}))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ;; the bridge opens its own device at page load and starts on a gesture

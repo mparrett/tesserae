@@ -458,6 +458,11 @@ one conflict, in the ball draw call, and both sides were kept.
   `dev` build falls back to the stale `3p/let-go` clone. The native sim ran about 1.65× faster
   than on a13e (measured 2026-10-17); web fps was inconclusive. `lg-a13e042791` is kept.
 - `tools/heavy.sh` falls back to macOS `lockf(1)` when `flock` is missing.
+- 2026-10-28: `tools/lg-pinned` now points at `3p/lg-bin/lg-d1cf4277ed` (let-go `d1cf427`,
+  built with let-go's `make build`, stamped `1.13.1-0.20261028065344-d1cf4277ed12`), and
+  the Pages workflow's `LETGO_SHA` and `audio-host`'s let-go module moved with it. It brings
+  let-go#1094 (the mouse steers in the browser) and #1079/#1080 (browser storage relayed
+  from the worker), so progress and the sound mode now save in the browser.
 
 ## 2026-10-14: a bundled terminal font for the browser build
 
