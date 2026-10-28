@@ -1,0 +1,33 @@
+(ns test.sfx-test
+  "The sound mode M cycles. The tests run on a stock lg, with no audio, so
+   this covers the mode bookkeeping, not what plays."
+  (:require [clojure.test :refer [deftest is]]
+            [tesserae.sfx :as sfx]
+            [tesserae.game :as g]))
+
+(deftest m-cycles-every-mode-and-wraps
+  (sfx/set-mode! :all)
+  (is (= [:sfx :music :off :all] (vec (repeatedly 4 sfx/cycle-mode!))))
+  (is (= :all @sfx/mode)))
+
+(deftest without-audio-nothing-starts
+  (sfx/start! {:sound :off})
+  (is (not @sfx/on?) "no backend, so M has nothing to switch")
+  (sfx/set-mode! :all))
+
+(deftest a-game-banner-steps-aside-for-the-sound-label
+  (reset! sfx/on? true)            ; as if there were audio
+  (sfx/set-mode! :all)
+  (reset! g/S {:mode :play :banner-t 0.0})
+  (g/banner! "FILL 1 BLUE" 1 2.5)
+  (g/sound-key!)
+  (is (= "EFFECTS ONLY" (:banner @g/S)))
+  (g/update-fx! 1.3)
+  (is (= "FILL 1 BLUE" (:banner @g/S)) "it comes back after the label")
+  (is (< 1.2 (:banner-t @g/S) 1.4) "for the time it had left")
+  (g/sound-key!)
+  (g/banner! "MARBLE LOST" 2 1.4)
+  (g/update-fx! 1.3)
+  (is (= "MARBLE LOST" (:banner @g/S)) "a newer game banner wins")
+  (reset! sfx/on? false)
+  (sfx/set-mode! :all))

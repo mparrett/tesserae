@@ -54,7 +54,14 @@ trowel in any terminal that reports motion.
 | ← → / ↑ ↓ / SPACE | Orrery: lean the table / level it / drop a marble from the hopper |
 | TAB | take another tile (Heart, costs 25) |
 | P | pause, R restart level, Q back to the menu, Ctrl-C quit |
+| M | sound: all → effects only → ambience only → off (when there is sound) |
 | ] / [ | debug: win the level / lose a spark |
+
+Sound comes from [undertone](https://github.com/mparrett/undertone): `tools/play-audio.sh`
+runs the game with it (all of play.sh's flags pass through), and the browser build has it.
+M's choice is saved; `--sound all|sfx|music|off` (`?sound=` in a browser) starts with one
+instead, `--music-gain 0..1` sets the ambience level (0.3) and `--mute` turns sound off
+entirely.
 
 ### Progress, unlocks and medals
 

@@ -86,7 +86,7 @@
   (let [[sx sy] (gfx/w->s @scr wx wy)]
     (swap! S update :floats conj {:x sx :y sy :s s :c c :life 1.1 :max 1.1})))
 
-(defn banner! [s c secs] (swap! S assoc :banner s :banner-c c :banner-t secs))
+(defn banner! [s c secs] (swap! S assoc :banner s :banner-c c :banner-t secs :banner-back nil))
 
 (defn burst! [wx wy c n spd]
   (swap! S update :parts
@@ -520,7 +520,7 @@
             :mag-t 0.0 :mag-cd 0.0 :tilt [0.0 0.0]
             :ward -1 :ward-t 0.0 :ward-save nil
             :decay-t (or (:decay l) 0.0)
-            :time 0.0 :banner nil :banner-t 0.0
+            :time 0.0 :banner nil :banner-t 0.0 :banner-back nil
             :lodes (lodestones)
             ;; meta layer: per-level bookkeeping
             :lost 0 :score0 (:score @S 0) :tally nil :over-saved false})
@@ -1588,7 +1588,11 @@
          (fn [fs] (into [] (comp (map (fn [f] (assoc f :y (- (:y f) (* dt 4.0)) :life (- (:life f) dt))))
                                  (filter #(pos? (:life %))))
                         fs)))
-  (swap! S update :banner-t - dt))
+  (swap! S update :banner-t - dt)
+  ;; a sound label lent the banner out: give back what's left of it
+  (let [st @S]
+    (when (and (:banner-back st) (not (pos? (:banner-t st))))
+      (let [[s c t] (:banner-back st)] (banner! s c t)))))
 
 (defn update-play! [dt]
   (swap! S update :time + dt)
@@ -1767,13 +1771,15 @@
 (defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
 
 (defn controls []
-  (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
-    (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" "P pause  Q menu"]
-    (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
-    (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
-    (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
-    :else ["←→/mouse  trowel" "SPACE  launch" "P pause  Q menu"]))
+  (let [m (if @sfx/on? "  M sound" "")
+        pq (str "P pause  Q menu" m)]
+    (cond
+      (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" (if @sfx/on? "Q quit   M sound" "Q      quit")]
+      (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" pq]
+      (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" pq]
+      (lv :ward) ["←↑→↓   move your tile" "TAB    take another" pq]
+      (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" pq]
+      :else ["←→/mouse  trowel" "SPACE  launch" pq])))
 
 ;; ---------------------------------------------------------------------------
 ;; the mortar well (3.3), part 2: the next-piece preview in the panel
@@ -1979,6 +1985,26 @@
       :title (to-title!)
       nil)))
 
+;; M cycles what plays (tesserae.sfx/MODES) and remembers it, when there is
+;; sound at all. The banner names the new mode; paused, it joins PAUSED. A
+;; game banner still showing steps aside and returns for the time it had left.
+(def sound-label {:all "SOUND ON" :sfx "EFFECTS ONLY" :music "AMBIENCE ONLY" :off "SOUND OFF"})
+(def ^:private sound-labels (set (vals sound-label)))
+(def ^:private SOUND-BANNER 1.2)
+
+(defn sound-key! []
+  (when @sfx/on?
+    (let [m (sfx/cycle-mode!)]
+      (M/save-sound! m)
+      (if (= :pause (:mode @S))
+        (banner! (str "PAUSED · " (sound-label m)) 0xffffff 1e9)
+        (let [st @S
+              back (when (and (:banner st) (not (contains? sound-labels (:banner st)))
+                              (> (:banner-t st) SOUND-BANNER))
+                     [(:banner st) (:banner-c st) (- (:banner-t st) SOUND-BANNER)])]
+          (banner! (sound-label m) 0xc8d0e8 SOUND-BANNER)
+          (swap! S assoc :banner-back (or back (:banner-back st))))))))
+
 (defn handle-event! [[k ev]]
   (let [st @S mode (:mode st) title? (neg? (:li st))]
     (cond
@@ -1992,6 +2018,7 @@
                        (if (< (* 70 (:mode-t st)) 400)
                          (swap! S assoc :mode-t 99.0)
                          (card-done!)))
+      (and (= k :m) (= ev :press) (not= mode :card) (not= mode :over) (not= mode :clear)) (sound-key!)
       title? (cond (contains? #{:q :esc} k) (when-not *in-wasm* (reset! quit? true))
                    (contains? #{:space :enter :click} k) (new-game! 0)
                    (and (keyword? k) (= 1 (count (name k))))
@@ -2367,7 +2394,9 @@
   (term/hide-cursor)
   (term/write (str gfx/ESC "[?7l"))
   (in/start!)
-  (sfx/start! o)
+  ;; a --sound (or ?sound=) given at launch beats the one M last saved
+  (sfx/start! (let [saved (M/sound)]
+                (if (and (not (:sound o)) (some #{saved} sfx/MODES)) (assoc o :sound saved) o)))
   (try
     (clear-screen!)
     (cond

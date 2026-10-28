@@ -38,6 +38,14 @@
 ;; The bed sits well under the one-shots by default: the sfx are the game's
 ;; feedback, the music is room tone. --music-gain overrides (0..1).
 (def MUSIC-GAIN 0.3)
+(def ^:private music-gain (atom MUSIC-GAIN))
+
+;; What plays, cycled in play by M: everything, the sfx alone, the music bed
+;; alone, or nothing. The bed keeps running when silenced, so it comes back on
+;; the beat it would have reached.
+(def MODES [:all :sfx :music :off])
+(def mode (atom :all))
+(defn- sfx-on? [] (contains? #{:all :sfx} @mode))
 (def ^:private quiet? (atom true))     ; the title's attract demo plays no sfx
 (def ^:private score-state (atom nil)) ; [mood seed level tension]
 (def ^:private base-tension (atom 0.0)) ; the level's own, before the last-spark lift
@@ -66,15 +74,41 @@
       :bridge (emit! (into [:score] sc))
       nil)))
 
+(defn- push-music-gain! []
+  (let [g (if (contains? #{:all :music} @mode) @music-gain 0.0)]
+    (case backend
+      :native ((native 'undertone/set-music-gain) g)
+      :bridge (emit! [:music-gain g])
+      nil)))
+
+(defn set-mode!
+  "Switch what plays (one of MODES). In the browser the page hears it too
+   (a tesserae-sound event) and keeps it for the next visit."
+  [m]
+  (reset! mode m)
+  (when @on?
+    (push-music-gain!)
+    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name m)}))))
+
+(defn cycle-mode!
+  "The next of MODES, applied. Returns it."
+  []
+  (let [m (get (zipmap MODES (conj (vec (rest MODES)) (first MODES))) @mode :all)]
+    (set-mode! m)
+    m))
+
 (defn start!
-  "Begin the music bed. o is the game's option map; :mute keeps it all off."
+  "Begin the music bed. o is the game's option map: :mute keeps it all off,
+   :sound picks the starting mode (one of MODES)."
   [o]
   (when (and backend (not (:mute o)))
     (reset! on? true)
-    (let [g (double (get o :music-gain MUSIC-GAIN))]
-      (case backend
-        :native (do (require 'undertone.ambience) ((native 'undertone/set-music-gain) g))
-        :bridge (emit! [:music-gain g])))
+    (reset! music-gain (double (get o :music-gain MUSIC-GAIN)))
+    (when (= backend :native) (require 'undertone.ambience))
+    (reset! mode (get o :sound :all))
+    (push-music-gain!)
+    ;; tells the page there is sound (it shows the pad's sound button), not a choice to keep
+    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name @mode) :start true}))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ;; the bridge opens its own device at page load and starts on a gesture
@@ -114,7 +148,7 @@
   "Fire one trigger map, dropping repeats of the same shot inside gap ms so a
    cascade of hits in one physics frame doesn't flood the 8-voice pool."
   [m gap]
-  (when (and @on? (not @quiet?))
+  (when (and @on? (not @quiet?) (sfx-on?))
     (let [k (:shot m) t (now-ms)]
       (when (>= (- t (get @last-ms k -100000)) gap)
         (swap! last-ms assoc k t)
@@ -147,6 +181,6 @@
   "A rising arpeggio in the level's key, timed by the engine (delay-ms), not
    by the frame loop."
   []
-  (when (and @on? (not @quiet?))
+  (when (and @on? (not @quiet?) (sfx-on?))
     (trigger* (vec (map-indexed (fn [i d] {:shot :tink :degree d :octave 0 :gain 0.55 :delay-ms (* 110 i)})
                                 [0 2 4 7])))))
