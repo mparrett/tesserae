@@ -11,7 +11,9 @@
       In the browser, xterm.js never speaks kitty, so a kitty event there is
       the touch pad's (web/shell.html): it holds just that key, and the
       keyboard stays on the fallback model.
-   3. mouse any-motion (1003 + SGR 1006): absolute paddle x, click = action."
+   3. mouse any-motion (1003 + SGR 1006): absolute paddle x, click = action.
+   Under pix-host the window's keys arrive with real releases too (held like
+   kitty's) and its mouse as a world x, both through pix/events."
   (:require [term] [clojure.string]))
 
 (def ESC (str (char 27)))
@@ -25,6 +27,7 @@
 (def last-press (atom {}))   ; key -> ms
 (def mouse-x (atom nil))     ; last mouse column (1-based terminal col)
 (def mouse-moved (atom false))
+(def mouse-wx (atom nil))    ; pix-host: mouse x in world units, set by window motion
 
 (def epoch (System/nanoTime))
 (defn now-ms [] (quot (- (System/nanoTime) epoch) 1000000))
@@ -106,12 +109,27 @@
       (swap! last-press assoc k t)
       (swap! held assoc k (+ t (if rep? REPEAT-MS FRESH-MS))))))
 
+(def ^:private pix-events
+  "pix-host's window input (pix/events), or nil on a stock lg."
+  (when-let [v (resolve 'pix/events)] @v))
+
+(defn- pix-poll
+  "Window events into evs: keys go through hold! as evented, motion sets
+   mouse-wx, releases stay out of the discrete list."
+  [evs t]
+  (reduce (fn [evs [k ev]]
+            (cond
+              (= k :mouse-wx) (do (reset! mouse-wx ev) (reset! mouse-moved true) evs)
+              :else (do (hold! k ev true t)
+                        (if (= ev :release) evs (conj evs [k ev])))))
+          evs (pix-events)))
+
 (defn poll!
   "Drain pending input. Returns a vector of discrete events [key event] and
    updates the held-key model and mouse position."
   []
   (let [t (now-ms)]
-    (loop [evs (wasm-resize-events t)]
+    (loop [evs (cond-> (wasm-resize-events t) pix-events (pix-poll t))]
       (if (term/key-pending?)
         (let [raw (term/read-key)
               p (parse raw)]
@@ -119,7 +137,7 @@
             (nil? p) (recur evs)
             (= :mouse (first p))
             (let [m (second p)]
-              (reset! mouse-x (:x m)) (reset! mouse-moved true)
+              (reset! mouse-x (:x m)) (reset! mouse-wx nil) (reset! mouse-moved true)
               (recur (if (and (= :press (:action m)) (= :left (:button m)))
                        (conj evs [:click :press]) evs)))
             :else

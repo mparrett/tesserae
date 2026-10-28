@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -18,6 +19,7 @@ import (
 //   (pix/present! rgba w h) show a frame: a byte-array of w*h RGBA, copied here
 //   (pix/closed?)           true once the window has gone (closed by the user, or close!)
 //   (pix/close!)            close the window
+//   (pix/events)            window input since the last call (input.go)
 //   (pix/present-arena! ...) the game's arena, composed here from its own
 //                            buffers (arena.go); opens the window on first use
 //
@@ -50,9 +52,16 @@ type game struct {
 	draws int
 }
 
-// PIX_SNAPSHOT=<file.png> saves the window's 60th drawn frame, so a headless
-// check can see what the window showed without a screen capture.
+// PIX_SNAPSHOT=<file.png> saves the window's 60th drawn frame (or the
+// PIX_SNAPSHOT_AT'th), so a headless check can see what the window showed
+// without a screen capture.
 var snapshot = os.Getenv("PIX_SNAPSHOT")
+var snapshotAt = func() int {
+	if n, err := strconv.Atoi(os.Getenv("PIX_SNAPSHOT_AT")); err == nil {
+		return n
+	}
+	return 60
+}()
 
 func (g *game) Update() error {
 	if g.up != nil {
@@ -62,6 +71,7 @@ func (g *game) Update() error {
 	if quit.Load() {
 		return ebiten.Termination
 	}
+	pollInput()
 	return nil
 }
 
@@ -84,9 +94,11 @@ func (g *game) Draw(screen *ebiten.Image) {
 	k := max(1, min(sw/iw, sh/ih))
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(float64(k), float64(k))
-	op.GeoM.Translate(float64((sw-iw*k)/2), float64((sh-ih*k)/2))
+	ox, oy := (sw-iw*k)/2, (sh-ih*k)/2
+	op.GeoM.Translate(float64(ox), float64(oy))
+	setView(ox, oy, k, iw, ih)
 	screen.DrawImage(g.img, op)
-	if g.draws++; snapshot != "" && g.draws == 60 {
+	if g.draws++; snapshot != "" && g.draws == snapshotAt {
 		saveSnapshot(screen)
 	}
 }
@@ -150,6 +162,7 @@ func installPix() {
 	ns.Def("closed?", native("closed?", 0, func([]vm.Value) (vm.Value, error) {
 		return vm.Boolean(closed.Load()), nil
 	}))
+	ns.Def("events", native("events", 0, drainEvents))
 	ns.Def("close!", native("close!", 0, func([]vm.Value) (vm.Value, error) {
 		quit.Store(true)
 		return vm.NIL, nil
