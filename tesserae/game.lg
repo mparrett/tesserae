@@ -1417,6 +1417,7 @@
         sc @scr
         target (cond
                  auto? (if (lv :core) (boss-dodge (autopilot)) (autopilot))
+                 (and @in/mouse-moved @in/mouse-wx) @in/mouse-wx
                  (and @in/mouse-moved mx) (/ (- mx (:ox sc) -0.5) (:k sc))
                  :else nil)
         ax (in/axis [:left :a :h] [:right :d :l])
