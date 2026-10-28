@@ -2383,7 +2383,10 @@
 
 (defn main! [o]
   (reset! opts o)
-  (gfx/set-glyph-mode! (get o :glyphs :quadrant))
+  ;; pix-host: the arena is a window of real pixels, so balls are plain light
+  ;; (no sub-cell glyphs) and the zoom doesn't follow the terminal
+  (when gfx/pix-present (reset! gfx/forced-k (get o :pix-k 8)))
+  (gfx/set-glyph-mode! (get o :glyphs (if gfx/pix-present :off :quadrant)))
   (let [[tc tr] (or (term/size) [100 30])]
     (reset! scr (new-screen tc tr)))
   (wire-world!)
@@ -2421,7 +2424,8 @@
             (swap! fps-stat (fn [[_ c b]] [(/ 1e9 (max frame-ns (* 1.0 el))) c b]))
             (let [ms (/ (- frame-ns el) 1e6)]
               (when (> ms 1.0) (async/<!! (async/timeout (long ms))))))
-          (when-not (or @quit? (and stop-at (> (System/nanoTime) stop-at)))
+          (when-not (or @quit? (and stop-at (> (System/nanoTime) stop-at))
+                        (gfx/pix-closed?))
             (recur t0)))))
     (finally
       (sfx/stop!)
