@@ -97,6 +97,10 @@
       (sput! "best" score)
       true)))
 
+;; The sound mode M last chose (tesserae.sfx/MODES), read fresh: it's one key.
+(defn sound [] (let [m (parse (sget "sound"))] (when (keyword? m) m)))
+(defn save-sound! [m] (sput! "sound" m))
+
 (defn- level-index [levels id]
   (first (keep-indexed (fn [j l] (when (= id (:id l)) j)) levels)))
 

@@ -54,7 +54,6 @@
     #pad button{font:600 18px/1 monospace;color:#c8c6bf;background:#14141a;border:1px solid #34343c;
                 border-radius:10px;touch-action:none}
     #pad button.on{background:#2c2c38;border-color:#6a6a78;color:#fff}
-    #pad .wide{grid-column:span 2}
     @media (orientation: landscape) {
       body.pad{flex-direction:row}
       body.pad #pad{grid-template-columns:repeat(2,56px);grid-auto-rows:48px;align-content:center;padding:0 0 0 10px}
@@ -64,6 +63,32 @@
   </style>
 </head>
 <body>
+  <script>
+  // The sound mode M picks: the game emits tesserae-sound when it changes, and
+  // its worker has no localStorage, so the page keeps it and hands it back as
+  // ?sound= before the game starts (the worker reads the URL at init). The URL
+  // follows each change, so a reload plays what was last chosen; the default,
+  // all, leaves no trace.
+  (() => {
+    const KEY = 'tesserae-sound';
+    const setURL = (mode) => {
+      const p = new URLSearchParams(location.search);
+      if (mode === 'all') p.delete('sound'); else p.set('sound', mode);
+      const q = p.toString();
+      history.replaceState(null, '', `${location.pathname}${q ? '?' + q : ''}${location.hash}`);
+    };
+    try {
+      const saved = localStorage.getItem(KEY);
+      if (saved && !new URLSearchParams(location.search).has('sound')) setURL(saved);
+    } catch {}
+    addEventListener('tesserae-sound', (e) => {
+      const mode = e.detail?.mode;
+      if (!mode) return;
+      setURL(mode);
+      try { if (mode === 'all') localStorage.removeItem(KEY); else localStorage.setItem(KEY, mode); } catch {}
+    });
+  })();
+  </script>
   <div id="status">loading TESSERAE...</div>
   <div id="app"></div>
   <div id="pad">
@@ -73,7 +98,8 @@
     <button data-key="C" data-hold>&#9654;</button>
     <button data-key="ESC">ESC</button>
     <button data-key="p">P</button>
-    <button data-key=" " class="wide">SPACE</button>
+    <button data-key="m" aria-label="sound">&#9834;</button>
+    <button data-key=" ">SPACE</button>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>

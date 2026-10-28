@@ -1767,13 +1767,15 @@
 (defn pips [n total] (apply str (for [i (range total)] (if (< i n) "●" "○"))))
 
 (defn controls []
-  (cond
-    (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" "Q      quit"]
-    (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" "P pause  Q menu"]
-    (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" "P pause  Q menu"]
-    (lv :ward) ["←↑→↓   move your tile" "TAB    take another" "P pause  Q menu"]
-    (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" "P pause  Q menu"]
-    :else ["←→/mouse  trowel" "SPACE  launch" "P pause  Q menu"]))
+  (let [m (if @sfx/on? "  M sound" "")
+        pq (str "P pause  Q menu" m)]
+    (cond
+      (neg? (:li @S)) ["SPACE  begin" "1-0 -=[]\\  jump to level" (if @sfx/on? "Q quit   M sound" "Q      quit")]
+      (lv :orrery) ["←→     lean the table" "SPACE  drop · ↑↓ level" pq]
+      (lv :tilt) ["←↑→↓   tilt the table" "SPACE  level it" pq]
+      (lv :ward) ["←↑→↓   move your tile" "TAB    take another" pq]
+      (lv :magnet) ["←→/mouse  trowel" "SPACE  launch · magnet" pq]
+      :else ["←→/mouse  trowel" "SPACE  launch" pq])))
 
 ;; ---------------------------------------------------------------------------
 ;; the mortar well (3.3), part 2: the next-piece preview in the panel
@@ -1979,6 +1981,18 @@
       :title (to-title!)
       nil)))
 
+;; M cycles what plays (tesserae.sfx/MODES) and remembers it, when there is
+;; sound at all. The banner names the new mode; paused, it joins PAUSED.
+(def sound-label {:all "SOUND ON" :sfx "EFFECTS ONLY" :music "AMBIENCE ONLY" :off "SOUND OFF"})
+
+(defn sound-key! []
+  (when @sfx/on?
+    (let [m (sfx/cycle-mode!)]
+      (M/save-sound! m)
+      (if (= :pause (:mode @S))
+        (banner! (str "PAUSED · " (sound-label m)) 0xffffff 1e9)
+        (banner! (sound-label m) 0xc8d0e8 1.2)))))
+
 (defn handle-event! [[k ev]]
   (let [st @S mode (:mode st) title? (neg? (:li st))]
     (cond
@@ -1992,6 +2006,7 @@
                        (if (< (* 70 (:mode-t st)) 400)
                          (swap! S assoc :mode-t 99.0)
                          (card-done!)))
+      (and (= k :m) (= ev :press) (not= mode :card) (not= mode :over) (not= mode :clear)) (sound-key!)
       title? (cond (contains? #{:q :esc} k) (when-not *in-wasm* (reset! quit? true))
                    (contains? #{:space :enter :click} k) (new-game! 0)
                    (and (keyword? k) (= 1 (count (name k))))
@@ -2367,7 +2382,9 @@
   (term/hide-cursor)
   (term/write (str gfx/ESC "[?7l"))
   (in/start!)
-  (sfx/start! o)
+  ;; a --sound (or ?sound=) given at launch beats the one M last saved
+  (sfx/start! (let [saved (M/sound)]
+                (if (and (not (:sound o)) (some #{saved} sfx/MODES)) (assoc o :sound saved) o)))
   (try
     (clear-screen!)
     (cond
