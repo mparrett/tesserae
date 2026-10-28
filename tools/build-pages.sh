@@ -12,11 +12,16 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$here/_site}"
+# Clear only a previous site (it has .nojekyll) or an empty dir, never an
+# arbitrary outdir someone passed.
+if [[ -d "$out" && -n "$(ls -A "$out")" && ! -e "$out/.nojekyll" ]]; then
+  echo "build-pages: $out isn't empty and isn't a previous site; refusing to clear it" >&2; exit 1
+fi
 rm -rf "$out"
 "$here/tools/build-web-audio.sh" "$out"
 touch "$out/.nojekyll"
 missing=0
-for f in .nojekyll index.html coi-serviceworker.js undertone-bridge.wasm undertone-bridge.js undertone-wasm_exec.js; do
-  [[ -s "$out/$f" || "$f" == .nojekyll ]] || { echo "build-pages: missing $f" >&2; missing=1; }
+for f in index.html coi-serviceworker.js undertone-bridge.wasm undertone-bridge.js undertone-wasm_exec.js; do
+  [[ -s "$out/$f" ]] || { echo "build-pages: missing $f" >&2; missing=1; }
 done
 exit "$missing"

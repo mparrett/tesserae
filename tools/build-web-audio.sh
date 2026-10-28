@@ -17,7 +17,7 @@ UNDERTONE="${UNDERTONE:-$here/../let-go-undertone-tesserae-sfx}"
 out="${1:-$here/dist/web}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-tmp="$(mktemp -d -t tess-shell)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/tess-shell.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 shell="$tmp/shell.html"
 sed 's|</body>|  <script src="audiolab.js"></script>\n  <script src="undertone-bridge.js"></script>\n</body>|' "$here/web/shell.html" > "$shell"
