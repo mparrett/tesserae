@@ -188,6 +188,9 @@ editor.
 
 TESSERAE also runs in a browser tab, built with let-go's WASM target (`lg -w`) and
 shown in xterm.js.
+It's published at <https://matt.parrett.us/tesserae/>, with sound: every push to
+`main` rebuilds it with `tools/build-pages.sh` and deploys it to GitHub Pages
+(`.github/workflows/pages.yml`). `just pages` builds and smoke-tests the same site locally.
 
 ```sh
 ./tools/serve-web.sh            # build dist/web, serve http://127.0.0.1:8360/
@@ -209,9 +212,10 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
   it's exactly twice as tall as wide, keeping the raster's pixels square. `?font=system`
   uses the platform mono instead. `tools/gen-terminal-font.py` regenerates the font from
   what the game draws.
-- The page must be served cross-origin isolated (COOP/COEP headers). Otherwise the first
-  key read fails with "no SharedArrayBuffer". `tools/coi-serve.py` does this;
-  `python -m http.server` does not.
+- The page must be cross-origin isolated, or the first key read fails with "no
+  SharedArrayBuffer". `tools/coi-serve.py` sends the COOP/COEP headers. A server that
+  can't (GitHub Pages, `python -m http.server`) gets them from `coi-serviceworker.js`,
+  which `lg -w` ships beside `index.html`: the page registers it and reloads once.
 - No command line in a browser, so play.sh's flags come from the URL:
   `?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30&all`. The shell adds
   `?grid=large`, which picks a smaller font so the game doubles its raster (124x50,

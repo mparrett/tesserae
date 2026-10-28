@@ -3,3 +3,4 @@ tools/lg-pinned
 dist/
 tools/fonts/.cache/
 audio-host/lg
+_site/

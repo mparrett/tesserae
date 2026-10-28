@@ -1,0 +1,104 @@
+name: pages
+
+# Build the browser version with sound (tools/build-pages.sh), smoke-test it the
+# way Pages serves it, then deploy to GitHub Pages. Pages can't set COOP/COEP;
+# the COI service worker lg -w ships re-adds them (see build-pages.sh).
+# Pull requests build and smoke-test without deploying. Same shape as
+# let-go-lab's pages.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; don't cancel an in-flight deploy. A PR's runs only
+# replace each other.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The let-go commit tools/lg-pinned is built from locally (lg-9981aa044e);
+  # bump the two together.
+  LETGO_SHA: 9981aa044eef3a2ee15dd373b216deb469230f3d
+  # undertone's page bridge (cmd/undertone-bridge) lives on its
+  # spike/tesserae-bridge branch; this is that branch's head as of 2026-10-27.
+  UNDERTONE_SHA: 7ddbe43337904ed9572783364f9625ccef316ee0
+  # build-web-audio.sh builds the bridge with TinyGo, which needs 0.43's
+  # -stack-size fix (see the comment there).
+  TINYGO_VERSION: 0.43.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch let-go and undertone (pinned)
+        run: |
+          git clone --filter=blob:none https://github.com/nooga/let-go "$RUNNER_TEMP/let-go"
+          git -C "$RUNNER_TEMP/let-go" checkout "$LETGO_SHA"
+          git clone --filter=blob:none https://github.com/mparrett/undertone "$RUNNER_TEMP/undertone"
+          git -C "$RUNNER_TEMP/undertone" checkout "$UNDERTONE_SHA"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ runner.temp }}/let-go/go.mod
+
+      - name: Install TinyGo (pinned)
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo${TINYGO_VERSION}.linux-amd64.tar.gz" \
+            -o "$RUNNER_TEMP/tinygo.tar.gz"
+          tar -xzf "$RUNNER_TEMP/tinygo.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/tinygo/bin" >> "$GITHUB_PATH"
+
+      - name: Build let-go
+        run: |
+          make -C "$RUNNER_TEMP/let-go" build
+          ln -s "$RUNNER_TEMP/let-go/bin/lg" tools/lg-pinned
+
+      - name: Build the Pages site
+        env:
+          LETGO_SRC: ${{ runner.temp }}/let-go
+          UNDERTONE: ${{ runner.temp }}/undertone
+        run: tools/build-pages.sh _site
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright (chromium)
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Smoke-test the site (no COOP/COEP, project subpath)
+        run: python tools/pages-smoke.py _site
+
+      - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
+        with:
+          enablement: true   # turn Pages on (Actions source) if it isn't
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
