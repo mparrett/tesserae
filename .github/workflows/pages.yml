@@ -23,9 +23,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The let-go commit tools/lg-pinned is built from locally (lg-9981aa044e);
+  # The let-go commit tools/lg-pinned is built from locally (lg-d1cf4277ed);
   # bump the two together.
-  LETGO_SHA: 9981aa044eef3a2ee15dd373b216deb469230f3d
+  LETGO_SHA: d1cf4277ed1207e0dddecff3a52b3ee6abca863c
   # undertone's page bridge (cmd/undertone-bridge) lives on its
   # spike/tesserae-bridge branch; this is that branch's head as of 2026-10-27.
   UNDERTONE_SHA: 7ddbe43337904ed9572783364f9625ccef316ee0

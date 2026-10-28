@@ -69,8 +69,9 @@ Progress is saved with let-go's `storage` namespace: one file per key under
 `~/.config/let-go/storage/<store>/` (`$XDG_CONFIG_HOME` if set). `play.sh` passes
 `-storage-id tesserae`; set `TESS_STORAGE_ID` to use another store. Keys are `best`
 (overall best score), `furthest` (the furthest unlocked level id) and `level/<id>`
-(best level score, best clear time, best medal, flawless flag), stored as EDN. If
-storage fails the game keeps running and the title panel says "progress not saved".
+(best level score, best clear time, best medal, flawless flag), plus `sound` (M's last
+choice), stored as EDN. If storage fails the game keeps running and the title panel says
+"progress not saved".
 `--autoplay` runs never save.
 
 On the title screen a level key starts only unlocked levels: level 1, plus every
@@ -230,9 +231,11 @@ node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (n
 - [How the settings combine](docs/display-settings/display-settings.png): window size,
   layout, font, screen density and glyph mode, through to font size, cell size and what
   you see. Its source, `diagram-state.json` beside it, is an agent-diagrams board.
-- Progress isn't saved in the browser yet. let-go's browser storage needs
-  `localStorage`, and the VM runs in a Web Worker, which has none, so the title panel
-  says "progress not saved".
+- Progress is saved in the browser too, in the page's `localStorage` under
+  `let-go:k-dGVzc2VyYWU:` (the store id, base64). The VM runs in a Web Worker, which has
+  no `localStorage`, so let-go hands it a copy at start and relays each write back to the
+  page. A write the page fails to make (storage full, or blocked) is only logged on the
+  page; the game still counts it as saved.
 - Ctrl-C and Q on the title screen don't quit, because a tab has nothing to quit to.
   Resizing the window refits the grid, and the game re-lays out within half a second.
 
