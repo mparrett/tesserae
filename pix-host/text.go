@@ -16,9 +16,8 @@ import (
 )
 
 // Text in the window, drawn as type rather than terminal cells:
-//   arena text  what gfx/text! wrote into tglyph/tcol this frame (banners,
-//               floats, "SPACE · launch", the tally), one run per row of
-//               adjacent cells, centred where the run's cells were
+//   (pix/text! cx cy s rgb)  arena text from gfx/text! (banners, floats,
+//               "SPACE · launch", the tally), centred where its cells were
 //   (pix/panel! row segs)  a panel row, segs [[text rgb] ...], beside the arena
 //   (pix/card! title accent lines prompt-rgb)  a level card over the arena
 //               until (pix/card! nil nil nil nil)
@@ -87,28 +86,22 @@ func rgb(c int64) color.Color {
 	return color.RGBA{uint8(c >> 16), uint8(c >> 8), uint8(c), 255}
 }
 
-// gatherRuns reads this frame's text cells (cols x rows, cols = S) into runs
-// for Draw. presentArena clears the cells afterwards.
-func gatherRuns(tg []vm.Value, tcol []int64, cols int) {
-	runsNext = runsNext[:0]
-	for y := range len(tg) / cols {
-		row := tg[y*cols : (y+1)*cols]
-		for x := 0; x < cols; {
-			if row[x] == nil || row[x] == vm.NIL {
-				x++
-				continue
-			}
-			var b bytes.Buffer
-			x0 := x
-			for ; x < cols && row[x] != nil && row[x] != vm.NIL; x++ {
-				b.WriteString(fmt.Sprint(row[x].Unbox()))
-			}
-			runsNext = append(runsNext, textRun{x0, y, x - x0, b.String(), tcol[x0+y*cols]})
-		}
-	}
+// addText is (pix/text! cx cy s rgb): gfx/text!'s string, kept whole so
+// texts in neighbouring cells don't run together. Shown from the next
+// present-arena! until the one after.
+func addText(a []vm.Value) (vm.Value, error) {
+	s := str(a[2])
+	n := len([]rune(s))
+	runsNext = append(runsNext, textRun{toInt(a[0]), toInt(a[1]), n, s, int64(toInt(a[3]))})
+	return vm.NIL, nil
+}
+
+// flushText makes this frame's texts the ones Draw shows.
+func flushText() {
 	textMu.Lock()
 	runs = append(runs[:0], runsNext...)
 	textMu.Unlock()
+	runsNext = runsNext[:0]
 }
 
 func drawText(dst *ebiten.Image, s string, x, y float64, c color.Color, align text.Align) {
@@ -146,9 +139,22 @@ func drawOverlay(screen *ebiten.Image, ox, oy, k, iw, ih, px int) {
 		}
 		drawText(screen, card.prompt, x, y+lineH*float64(3+len(card.lines)), rgb(card.promptC), text.AlignStart)
 	} else {
+		// Texts that would overlap (floats spawned together) stack a line
+		// apart, where the terminal would let the later one overwrite cells.
+		var placed [][4]float64
 		for _, r := range runs {
 			cx := float64(ox) + (float64(r.x)+float64(r.n)/2)*float64(k)
 			cy := float64(oy) + float64(2*r.y+1)*float64(k)
+			hw := text.Advance(r.s, face) / 2
+			for clash := true; clash; {
+				clash = false
+				for _, p := range placed {
+					if cx-hw < p[1] && cx+hw > p[0] && cy-lineH/2 < p[3] && cy+lineH/2 > p[2] {
+						cy, clash = p[2]-lineH/2, true
+					}
+				}
+			}
+			placed = append(placed, [4]float64{cx - hw, cx + hw, cy - lineH/2, cy + lineH/2})
 			drawText(screen, r.s, cx, cy, rgb(r.c), text.AlignCenter)
 		}
 	}

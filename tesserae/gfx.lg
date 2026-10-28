@@ -398,10 +398,21 @@
               (recur (inc x)))))
         (recur (inc y))))))
 
+(defn- pix-fn [sym] (when-let [v (resolve sym)] @v))
+
+(def pix-panel "pix-host's panel row setter (pix/panel!), or nil." (pix-fn 'pix/panel!))
+(def pix-card "pix-host's level card (pix/card!), or nil." (pix-fn 'pix/card!))
+(def pix-open "pix-host's window opener (pix/open-arena!), or nil." (pix-fn 'pix/open-arena!))
+
+(def ^:private pix-text "pix-host's arena text (pix/text!), or nil." (pix-fn 'pix/text!))
+
 (defn text!
   "Overlay a string on arena cells starting at cell (cx,cy). Glyph bg is the
-   pixel colour beneath, so text floats over the field."
+   pixel colour beneath, so text floats over the field. Under pix-host the
+   string goes to the window whole, to be drawn as type."
   [scr cx cy s c]
+  (if pix-text
+    (pix-text cx cy s c)
   (let [cols (:cols scr) n (count s)]
     (when (and (>= cy 0) (< cy (:rows scr)))
       (dotimes [j n]
@@ -410,7 +421,7 @@
             (let [i (+ x (* cy cols))]
               (aset (:tglyph scr) i (subs s j (inc j)))
               (aset (:tcol scr) i c)
-              (mark-cell! scr x cy))))))))
+              (mark-cell! scr x cy)))))))))
 
 (defn world-text!
   "Centre text on a world position (follows the field's rotation)."
@@ -465,12 +476,6 @@
   "pix-host's arena presenter (pix/present-arena!), or nil on a stock lg."
   (when-let [v (resolve 'pix/present-arena!)] @v))
 
-(defn- pix-fn [sym] (when-let [v (resolve sym)] @v))
-
-(def pix-panel "pix-host's panel row setter (pix/panel!), or nil." (pix-fn 'pix/panel!))
-(def pix-card "pix-host's level card (pix/card!), or nil." (pix-fn 'pix/card!))
-(def pix-open "pix-host's window opener (pix/open-arena!), or nil." (pix-fn 'pix/open-arena!))
-
 (defn pix-closed?
   "Has pix-host's window gone? False on a stock lg."
   []
@@ -483,7 +488,7 @@
         outside (let [c (static-fn -1.0 -1.0)] (post (cr c) (cg c) (cb c)))]
     (pix-present (:S scr) (:k scr) (aget xf 0) (aget xf 1) (== 1.0 (aget xf 2)) outside
                  (:ovr scr) (:wcache scr) (:acc-r scr) (:acc-g scr) (:acc-b scr)
-                 (:tglyph scr) (:smask scr) (:mark scr) (:rmark scr) (:tcol scr))
+                 (:tglyph scr) (:smask scr) (:mark scr) (:rmark scr))
     (reset! (:full scr) false)
     nil))
 
