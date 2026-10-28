@@ -465,6 +465,12 @@
   "pix-host's arena presenter (pix/present-arena!), or nil on a stock lg."
   (when-let [v (resolve 'pix/present-arena!)] @v))
 
+(defn- pix-fn [sym] (when-let [v (resolve sym)] @v))
+
+(def pix-panel "pix-host's panel row setter (pix/panel!), or nil." (pix-fn 'pix/panel!))
+(def pix-card "pix-host's level card (pix/card!), or nil." (pix-fn 'pix/card!))
+(def pix-open "pix-host's window opener (pix/open-arena!), or nil." (pix-fn 'pix/open-arena!))
+
 (defn pix-closed?
   "Has pix-host's window gone? False on a stock lg."
   []
@@ -477,7 +483,7 @@
         outside (let [c (static-fn -1.0 -1.0)] (post (cr c) (cg c) (cb c)))]
     (pix-present (:S scr) (:k scr) (aget xf 0) (aget xf 1) (== 1.0 (aget xf 2)) outside
                  (:ovr scr) (:wcache scr) (:acc-r scr) (:acc-g scr) (:acc-b scr)
-                 (:tglyph scr) (:smask scr) (:mark scr) (:rmark scr))
+                 (:tglyph scr) (:smask scr) (:mark scr) (:rmark scr) (:tcol scr))
     (reset! (:full scr) false)
     nil))
 

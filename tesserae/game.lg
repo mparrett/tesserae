@@ -1739,7 +1739,9 @@
         (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (quot (:rows sc) 2) s (:banner-c st))))
     (when (and (paddle-level?) (some :stuck (:balls st)) (not (neg? (:li st))) (= :play (:mode st)))
       (let [s "SPACE · launch"]
-        (gfx/text! sc (quot (- (:cols sc) (count s)) 2) (- (:rows sc) 5) s 0xa0a8c0)))
+        ;; pix-host's type stands taller than a terminal row, so it sits clear of the trowel
+        (gfx/text! sc (quot (- (:cols sc) (count s)) 2)
+                   (if (> (:k sc) 4) (quot (* 42 (:k sc)) 2) (- (:rows sc) 5)) s 0xa0a8c0)))
     (meta-overlay! sc st)
     (gfx/compose! sc w/sample sb)))
 
@@ -1754,17 +1756,27 @@
 
 (def panel-cache (atom {}))
 
+(defn- pix-panel-row!
+  "A panel row to pix-host's window, which draws the panel beside the arena;
+   rows count from the panel's top, and only changes are sent."
+  [row segs]
+  (when (not= segs (get @panel-cache row))
+    (swap! panel-cache assoc row segs)
+    (gfx/pix-panel (- row (:panel-y @scr)) (vec segs))))
+
 (defn panel-line! [^StringBuilder sb row s c]
   (let [sc @scr
         s (let [s (str s)] (if (> (count s) (- PANEL-W 1)) (subs s 0 (- PANEL-W 1)) s))
         s (str s (apply str (repeat (- PANEL-W (count s)) " ")))
         key [s c]]
+    (if gfx/pix-panel
+      (pix-panel-row! row [[s c]])
     (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (<= row (:tr sc)) (not= key (get @panel-cache row)))
       (swap! panel-cache assoc row key)
       (gfx/at sb (:panel-x sc) row)
       (gfx/bg! sb 0x000000)
       (gfx/fg! sb c)
-      (.append sb s))))
+      (.append sb s)))))
 
 (def level-keys "1234567890-=[]\\")   ; the number row, then [ ] \ for the Orrery
 (defn level-key-label [j] (if (< j (count level-keys)) (subs level-keys j (inc j)) " "))
@@ -1893,7 +1905,7 @@
   (let [sc @scr st @S
         {:keys [title lines]} (:card st)
         tc (:tc sc) tr (:tr sc)
-        width (min 60 (- tc 8))
+        width (if gfx/pix-card 44 (min 60 (- tc 8)))
         wrapped (vec (mapcat #(wrap-text % width) lines))
         shown (int (* 70 (:mode-t st)))
         x0 (max 1 (quot (- tc width) 2))
@@ -1914,12 +1926,22 @@
               vis (subs ln 0 (max 0 (min (count ln) left)))]
           (gfx/at sb x0 (+ y0 3 j)) (gfx/fg! sb 0xd8dcea) (.append sb vis)
           (recur (inc j) (- left (count ln) 1)))))
-    (let [total (reduce + (map #(inc (count %)) wrapped))]
+    (let [total (reduce + (map #(inc (count %)) wrapped))
+          prompt-c (if (> shown total)
+                     (gfx/mix 0x303040 0xa0a8c8 (* 0.5 (+ 1 (math/sin (* 4 (:mode-t st))))))
+                     0x05050a)]
       (gfx/at sb x0 (+ y0 4 (count wrapped)))
-      (gfx/fg! sb (if (> shown total)
-                    (gfx/mix 0x303040 0xa0a8c8 (* 0.5 (+ 1 (math/sin (* 4 (:mode-t st))))))
-                    0x05050a))
-      (.append sb "SPACE to continue"))))
+      (gfx/fg! sb prompt-c)
+      (.append sb "SPACE to continue")
+      (when gfx/pix-card
+        (gfx/pix-card title acc
+                      (loop [j 0 left shown out []]
+                        (if (< j (count wrapped))
+                          (let [ln (nth wrapped j)]
+                            (recur (inc j) (- left (count ln) 1)
+                                   (conj out (subs ln 0 (max 0 (min (count ln) left))))))
+                          out))
+                      prompt-c)))))
 
 (defn show-card! [title lines accent then]
   (swap! S assoc :mode :card :mode-t 0.0 :card {:title title :lines lines}
@@ -2073,7 +2095,8 @@
   (let [sb (StringBuilder.)]
     (if (= :card (:mode @S))
       (draw-card! sb)
-      (do (draw-frame-border! sb)
+      (do (when gfx/pix-card (gfx/pix-card nil nil nil nil))
+          (draw-frame-border! sb)
           (draw-arena! sb)
           (let [sc @scr st (:stats sc)]
             (swap! fps-stat (fn [[f _ _]] [f (aget st 0) (aget st 1)])))
@@ -2246,12 +2269,14 @@
                      (recur (rest ss) (- left (count s)) (conj out [s c])))))
         n (reduce + (map #(count (first %)) segs))
         key segs]
+    (if gfx/pix-panel
+      (pix-panel-row! row segs)
     (when (and (<= (+ (:panel-x sc) PANEL-W) (inc (:tc sc))) (<= row (:tr sc)) (not= key (get @panel-cache row)))
       (swap! panel-cache assoc row key)
       (gfx/at sb (:panel-x sc) row)
       (gfx/bg! sb 0x000000)
       (doseq [[s c] segs] (gfx/fg! sb c) (.append sb s))
-      (.append sb (apply str (repeat (- PANEL-W n) " "))))))
+      (.append sb (apply str (repeat (- PANEL-W n) " ")))))))
 
 (defn medal-glyph
   "[glyph colour] for a level record."
@@ -2386,7 +2411,9 @@
   (reset! opts o)
   ;; pix-host: the arena is a window of real pixels, so balls are plain light
   ;; (no sub-cell glyphs) and the zoom doesn't follow the terminal
-  (when gfx/pix-present (reset! gfx/forced-k (get o :pix-k 8)))
+  (when gfx/pix-present
+    (reset! gfx/forced-k (get o :pix-k 8))
+    (gfx/pix-open (* 48 @gfx/forced-k)))
   (gfx/set-glyph-mode! (get o :glyphs (if gfx/pix-present :off :quadrant)))
   (let [[tc tr] (or (term/size) [100 30])]
     (reset! scr (new-screen tc tr)))

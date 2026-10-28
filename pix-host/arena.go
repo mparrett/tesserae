@@ -17,7 +17,7 @@ import (
 // clears what compose! clears as it goes (light, overlay, text and sprite
 // cells, dirty marks), so the next frame starts clean.
 var arenaArgs = []string{"S", "k", "cos", "sin", "ident?", "outside",
-	"ovr", "wcache", "acc-r", "acc-g", "acc-b", "tglyph", "smask", "mark", "rmark"}
+	"ovr", "wcache", "acc-r", "acc-g", "acc-b", "tglyph", "smask", "mark", "rmark", "tcol"}
 
 var (
 	rgba     []byte
@@ -133,9 +133,13 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 		ovr[i] = -1
 	}
 	if ta, ok := a[11].(*vm.TypedArray); ok && ta.Kind() == vm.ArrayObject {
-		for i, v := range ta.Unbox().([]vm.Value) {
+		tg := ta.Unbox().([]vm.Value)
+		if tc, ok := a[15].(*vm.TypedArray); ok && tc.Kind() == vm.ArrayInt {
+			gatherRuns(tg, tc.Unbox().([]int64), S)
+		}
+		for i, v := range tg {
 			if v != vm.NIL && v != nil {
-				ta.Unbox().([]vm.Value)[i] = vm.NIL
+				tg[i] = vm.NIL
 			}
 		}
 	}
@@ -145,16 +149,19 @@ func presentArena(a []vm.Value) (vm.Value, error) {
 		}
 	}
 
-	if !isOpen.Load() {
-		// a window about 2.5 px per arena pixel at k=4, within a laptop screen
-		side := min(900, max(480, S*2))
-		if !openWindow(side, side, "TESSERAE") {
-			return vm.TRUE, nil
-		}
+	if !isOpen.Load() && !openArena(S) {
+		return vm.TRUE, nil
 	}
 	setFrame(rgba, S, S)
 	stats = append(stats, time.Since(t0))
 	return vm.Boolean(closed.Load()), nil
+}
+
+// openArena opens the window for an S-pixel arena and the panel beside it:
+// about 2.5 px per arena pixel at k=4, within a laptop screen.
+func openArena(S int) bool {
+	side := min(900, max(480, S*2))
+	return openWindow(side+panelPx, side, "TESSERAE")
 }
 
 // writeStats saves frame timings to $PIX_STATS, when set: Go compose time and
