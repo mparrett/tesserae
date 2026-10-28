@@ -116,8 +116,13 @@
 (def WORLD 48.0)
 (def HALFW 24.0)
 
+(def forced-k
+  "A zoom to use whatever the terminal's size, or nil. Set under pix-host,
+   where the arena goes to a window rather than the terminal."
+  (atom nil))
+
 (defn- best-k [fits?]
-  (loop [k 4] (cond (zero? k) 0 (fits? k) k :else (recur (dec k)))))
+  (or @forced-k (loop [k 4] (cond (zero? k) 0 (fits? k) k :else (recur (dec k))))))
 
 (defn make-screen
   "Layout for a terminal of tc x tr cells and a panel of panel-w x panel-h:
@@ -456,11 +461,27 @@
                   (bit-shift-left (post8 (+ (bit-and (bit-shift-right base 8) 255) lg)) 8))
           (post8 (+ (bit-and base 255) lb))))
 
-(defn compose!
-  "Diff and emit the arena into sb. static-fn: (wx wy) -> packed colour; only
-   used for the outside colour here (the static layer comes from the cache).
-   Fills (:stats scr) = [cells-emitted bytes dirty-cells]."
-  [scr static-fn ^StringBuilder sb]
+(def pix-present
+  "pix-host's arena presenter (pix/present-arena!), or nil on a stock lg."
+  (when-let [v (resolve 'pix/present-arena!)] @v))
+
+(defn pix-closed?
+  "Has pix-host's window gone? False on a stock lg."
+  []
+  (if-let [v (resolve 'pix/closed?)] (@v) false))
+
+(defn- compose-pix!
+  "The arena to pix-host's window: the per-pixel work compose! does, in Go."
+  [scr static-fn]
+  (let [xf (:xf scr)
+        outside (let [c (static-fn -1.0 -1.0)] (post (cr c) (cg c) (cb c)))]
+    (pix-present (:S scr) (:k scr) (aget xf 0) (aget xf 1) (== 1.0 (aget xf 2)) outside
+                 (:ovr scr) (:wcache scr) (:acc-r scr) (:acc-g scr) (:acc-b scr)
+                 (:tglyph scr) (:smask scr) (:mark scr) (:rmark scr))
+    (reset! (:full scr) false)
+    nil))
+
+(defn- compose-term! [scr static-fn ^StringBuilder sb]
   (let [S (:S scr) cols (:cols scr) rows (:rows scr)
         ox (:ox scr) oy (:oy scr)
         full? @(:full scr)
@@ -570,6 +591,16 @@
     (aset stats 1 (- (.length sb) start-len))
     (aset stats 2 (aget v 5))
     nil))
+
+(defn compose!
+  "Diff and emit the arena into sb. static-fn: (wx wy) -> packed colour; only
+   used for the outside colour here (the static layer comes from the cache).
+   Fills (:stats scr) = [cells-emitted bytes dirty-cells]. Under pix-host the
+   arena goes to its window instead (compose-pix!)."
+  [scr static-fn ^StringBuilder sb]
+  (if pix-present
+    (compose-pix! scr static-fn)
+    (compose-term! scr static-fn sb)))
 
 ;; ---------------------------------------------------------------------------
 ;; terminal helpers for non-arena UI (panel, cards)

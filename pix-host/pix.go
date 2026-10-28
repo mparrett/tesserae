@@ -18,6 +18,8 @@ import (
 //   (pix/present! rgba w h) show a frame: a byte-array of w*h RGBA, copied here
 //   (pix/closed?)           true once the window has gone (closed by the user, or close!)
 //   (pix/close!)            close the window
+//   (pix/present-arena! ...) the game's arena, composed here from its own
+//                            buffers (arena.go); opens the window on first use
 //
 // lg and Ebitengine run on different threads. present! copies the frame under
 // a lock and Draw uploads the newest one, so lg never waits on the display
@@ -39,6 +41,7 @@ var (
 
 	quit   atomic.Bool
 	closed atomic.Bool
+	isOpen atomic.Bool
 )
 
 type game struct {
@@ -109,6 +112,8 @@ func (g *game) Layout(ow, oh int) (int, int) { return ow, oh }
 func runWindow(r winReq) {
 	quit.Store(false)
 	closed.Store(false)
+	isOpen.Store(true)
+	defer isOpen.Store(false)
 	ebiten.SetWindowSize(r.w, r.h)
 	ebiten.SetWindowTitle(r.title)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
@@ -126,12 +131,9 @@ func runWindow(r winReq) {
 func installPix() {
 	ns := vm.NewNamespace("pix")
 	ns.Def("open!", native("open!", 3, func(a []vm.Value) (vm.Value, error) {
-		w, h := toInt(a[0]), toInt(a[1])
-		r := winReq{w: w, h: h, title: fmt.Sprint(a[2].Unbox()), up: make(chan struct{})}
-		openReq <- r
-		<-r.up
-		return vm.Boolean(!closed.Load()), nil
+		return vm.Boolean(openWindow(toInt(a[0]), toInt(a[1]), fmt.Sprint(a[2].Unbox()))), nil
 	}))
+	ns.Def("present-arena!", native("present-arena!", len(arenaArgs), presentArena))
 	ns.Def("present!", native("present!", 3, func(a []vm.Value) (vm.Value, error) {
 		ta, ok := a[0].(*vm.TypedArray)
 		if !ok || ta.Kind() != vm.ArrayByte {
@@ -142,14 +144,7 @@ func installPix() {
 		if len(px) < w*h*4 {
 			return vm.NIL, fmt.Errorf("pix/present!: %d bytes is short of %dx%d RGBA", len(px), w, h)
 		}
-		mu.Lock()
-		if cap(frame) < w*h*4 {
-			frame = make([]byte, w*h*4)
-		}
-		frame = frame[:w*h*4]
-		copy(frame, px)
-		fw, fh, fresh = w, h, true
-		mu.Unlock()
+		setFrame(px, w, h)
 		return vm.NIL, nil
 	}))
 	ns.Def("closed?", native("closed?", 0, func([]vm.Value) (vm.Value, error) {
@@ -162,6 +157,27 @@ func installPix() {
 	rt.RegisterNS(ns)
 }
 
+// openWindow asks main to open the window and waits until it is up. Reports
+// whether it is.
+func openWindow(w, h int, title string) bool {
+	r := winReq{w: w, h: h, title: title, up: make(chan struct{})}
+	openReq <- r
+	<-r.up
+	return !closed.Load()
+}
+
+// setFrame hands a finished RGBA frame to Draw.
+func setFrame(px []byte, w, h int) {
+	mu.Lock()
+	if cap(frame) < w*h*4 {
+		frame = make([]byte, w*h*4)
+	}
+	frame = frame[:w*h*4]
+	copy(frame, px)
+	fw, fh, fresh = w, h, true
+	mu.Unlock()
+}
+
 func toInt(v vm.Value) int {
 	switch n := v.Unbox().(type) {
 	case int:
@@ -170,6 +186,18 @@ func toInt(v vm.Value) int {
 		return int(n)
 	case float64:
 		return int(n)
+	}
+	return 0
+}
+
+func toFloat(v vm.Value) float64 {
+	switch n := v.Unbox().(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
 	}
 	return 0
 }

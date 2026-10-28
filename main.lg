@@ -12,6 +12,7 @@
             "--fps" (recur (drop 2 as) (assoc o :fps (parse-long b)))
             "--seconds" (recur (drop 2 as) (assoc o :seconds (parse-double b)))
             "--glyphs" (recur (drop 2 as) (assoc o :glyphs (keyword b)))   ; quadrant|sextant|off
+            "--pix-k" (recur (drop 2 as) (assoc o :pix-k (parse-long b)))   ; pix-host: arena zoom (8)
             ;; trowel feel, for playtesting (defaults in tesserae.game)
             "--paddle-speed" (recur (drop 2 as) (assoc o :paddle-speed (parse-double b)))
             "--paddle-accel" (recur (drop 2 as) (assoc o :paddle-accel (parse-double b)))

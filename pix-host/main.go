@@ -21,10 +21,15 @@ func main() {
 	_ = letgo.CurrentMusic() // the import registers the audio namespace
 	installPix()
 	done := make(chan int, 1)
-	go func() { done <- cli.Main(version, commit) }()
+	go func() {
+		code := cli.Main(version, commit)
+		quit.Store(true) // an open window ends, so main gets back to this select
+		done <- code
+	}()
 	for {
 		select {
 		case code := <-done:
+			writeStats()
 			os.Exit(code)
 		case w := <-openReq:
 			runWindow(w)
