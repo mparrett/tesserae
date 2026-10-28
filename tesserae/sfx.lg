@@ -107,6 +107,8 @@
     (when (= backend :native) (require 'undertone.ambience))
     (reset! mode (get o :sound :all))
     (push-music-gain!)
+    ;; tells the page there is sound (it shows the pad's sound button), not a choice to keep
+    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name @mode) :start true}))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ;; the bridge opens its own device at page load and starts on a gesture
