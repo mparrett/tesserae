@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"strconv"
@@ -20,6 +21,8 @@ import (
 //   (pix/closed?)           true once the window has gone (closed by the user, or close!)
 //   (pix/close!)            close the window
 //   (pix/events)            window input since the last call (input.go)
+//   (pix/open-arena! S)     open the window for an S-px arena and its panel
+//   (pix/panel! ...), (pix/card! ...)  text beside and over the arena (text.go)
 //   (pix/present-arena! ...) the game's arena, composed here from its own
 //                            buffers (arena.go); opens the window on first use
 //
@@ -47,13 +50,13 @@ var (
 )
 
 type game struct {
-	up    chan struct{}
-	img   *ebiten.Image
-	draws int
+	up      chan struct{}
+	img     *ebiten.Image
+	snapped bool
 }
 
-// PIX_SNAPSHOT=<file.png> saves the window's 60th drawn frame (or the
-// PIX_SNAPSHOT_AT'th), so a headless check can see what the window showed
+// PIX_SNAPSHOT=<file.png> saves the window as drawn after Update tick 60 (or
+// PIX_SNAPSHOT_AT, on the same clock as PIX_INJECT), so a headless check can see what the window showed
 // without a screen capture.
 var snapshot = os.Getenv("PIX_SNAPSHOT")
 var snapshotAt = func() int {
@@ -85,20 +88,32 @@ func (g *game) Draw(screen *ebiten.Image) {
 		fresh = false
 	}
 	mu.Unlock()
-	if g.img == nil {
-		return
-	}
-	// Largest whole-number scale that fits, centred: square pixels stay square.
+	// Largest whole-number scale that fits beside the panel, centred in what
+	// is left: square pixels stay square. A window too narrow drops the panel.
+	// Before the first arena frame (a level card) the arena is the square
+	// that fits, at scale 1, so the card has somewhere to go.
+	screen.Fill(color.Black)
 	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
-	iw, ih := g.img.Bounds().Dx(), g.img.Bounds().Dy()
-	k := max(1, min(sw/iw, sh/ih))
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(float64(k), float64(k))
-	ox, oy := (sw-iw*k)/2, (sh-ih*k)/2
-	op.GeoM.Translate(float64(ox), float64(oy))
-	setView(ox, oy, k, iw, ih)
-	screen.DrawImage(g.img, op)
-	if g.draws++; snapshot != "" && g.draws == snapshotAt {
+	aw, px := sw-panelPx, sw-panelPx+16
+	iw, ih := min(aw, sh), min(aw, sh)
+	if g.img != nil {
+		iw, ih = g.img.Bounds().Dx(), g.img.Bounds().Dy()
+	}
+	if aw < iw {
+		aw, px = sw, -1
+	}
+	k := max(1, min(aw/iw, sh/ih))
+	ox, oy := (aw-iw*k)/2, (sh-ih*k)/2
+	if g.img != nil {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Scale(float64(k), float64(k))
+		op.GeoM.Translate(float64(ox), float64(oy))
+		setView(ox, oy, k, iw, ih)
+		screen.DrawImage(g.img, op)
+	}
+	drawOverlay(screen, ox, oy, k, iw, ih, px)
+	if snapshot != "" && ticks >= snapshotAt && !g.snapped {
+		g.snapped = true
 		saveSnapshot(screen)
 	}
 }
@@ -163,6 +178,11 @@ func installPix() {
 		return vm.Boolean(closed.Load()), nil
 	}))
 	ns.Def("events", native("events", 0, drainEvents))
+	ns.Def("panel!", native("panel!", 2, setPanel))
+	ns.Def("card!", native("card!", 4, setCard))
+	ns.Def("open-arena!", native("open-arena!", 1, func(a []vm.Value) (vm.Value, error) {
+		return vm.Boolean(isOpen.Load() || openArena(toInt(a[0]))), nil
+	}))
 	ns.Def("close!", native("close!", 0, func([]vm.Value) (vm.Value, error) {
 		quit.Store(true)
 		return vm.NIL, nil
