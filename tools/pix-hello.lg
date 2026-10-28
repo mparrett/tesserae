@@ -1,0 +1,24 @@
+;; pix-host smoke: a window, a moving 96x96 gradient for ~3 s, then close.
+;;   pix-host/lg tools/pix-hello.lg
+(def W 96)
+(def H 96)
+(def px (byte-array (* W H 4)))
+
+(println :open (pix/open! 768 768 "pix hello"))
+(let [t0 (System/nanoTime)]
+  (loop [f 0]
+    (dotimes [y H]
+      (dotimes [x W]
+        (let [i (* 4 (+ x (* y W)))]
+          (aset px i (mod (+ x f) 256))
+          (aset px (+ i 1) (mod (* 2 y) 256))
+          (aset px (+ i 2) 160)
+          (aset px (+ i 3) 255))))
+    (pix/present! px W H)
+    (async/<!! (async/timeout 16))
+    (if (or (pix/closed?) (>= f 180))
+      (println :frames f :ms-per-frame (/ (/ (- (System/nanoTime) t0) 1e6) (max 1 f)))
+      (recur (inc f)))))
+(pix/close!)
+(async/<!! (async/timeout 200))
+(println :closed (pix/closed?))
