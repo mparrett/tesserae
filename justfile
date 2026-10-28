@@ -1,5 +1,5 @@
-# Local stand-in for CI: the repo has no GitHub Actions workflow, so `just ci`
-# is the check to run before merging. Everything uses tools/lg-pinned, which
+# Local stand-in for CI: GitHub Actions only builds and deploys the Pages site
+# (.github/workflows/pages.yml), so `just ci` is the check to run before merging. Everything uses tools/lg-pinned, which
 # each checkout symlinks to its let-go binary (gitignored).
 
 default:
@@ -25,3 +25,9 @@ sim secs="5": lg
 # The browser build (compiles main.lg and every namespace it loads).
 web out="dist/web": lg
     tools/build-web.sh {{out}}
+
+# The GitHub Pages site (browser build with sound), smoke-tested as Pages serves
+# it. UNDERTONE=<checkout> names undertone's bridge branch; see build-web-audio.sh.
+pages out="_site": lg
+    tools/build-pages.sh {{out}}
+    uv run --with=playwright python tools/pages-smoke.py {{out}}
