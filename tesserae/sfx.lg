@@ -104,8 +104,13 @@
     (when (= backend :native) (require 'undertone.ambience))
     (reset! mode (get o :sound :all))
     (push-music-gain!)
-    ;; tells the page there is sound, so it shows the touch pad's sound button
-    (when (= backend :bridge) (js/emit "tesserae-sound" {:mode (name @mode)}))
+    ;; tells the page there is sound, so it shows the touch pad's sound button;
+    ;; in a one-VM build the backend is :native but the page still listens
+    (when *in-wasm* (js/emit "tesserae-sound" {:mode (name @mode)}))
+    ;; ?queue= tunes the browser's audio queue per device. Native ignores it,
+    ;; and undertone versions without set-queue don't resolve it.
+    (when-let [q (and (= backend :native) (:queue o))]
+      (when-let [f (native 'undertone/set-queue)] (f q)))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
     ;; the bridge opens its own device at page load and starts on a gesture

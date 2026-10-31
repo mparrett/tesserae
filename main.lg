@@ -20,6 +20,7 @@
             "--all" (recur (rest as) (assoc o :all true))                   ; unlock every level
             "--mute" (recur (rest as) (assoc o :mute true))                 ; no sound even when the runtime has it
             "--music-gain" (recur (drop 2 as) (assoc o :music-gain (parse-double b)))   ; 0..1, the bed under the sfx
+            "--queue" (recur (drop 2 as) (assoc o :queue (parse-long b)))   ; ms of browser audio queued ahead
             "--sound" (recur (drop 2 as) (if (contains? #{"all" "sfx" "music" "off"} b)   ; what plays at start; M cycles it
                                            (assoc o :sound (keyword b)) o))
             "--reset-progress" (recur (rest as) (assoc o :reset-progress true))
@@ -31,7 +32,7 @@
             (recur (rest as) o))))))
 
 ;; In the browser there are no command-line args; the same flags come from the
-;; page URL instead: ?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30.
+;; page URL instead: ?level=3&skip-card&autoplay&stats&glyphs=sextant&fps=30&queue=200.
 ;; (js/url-param is nil off-browser.)
 (defn url-args []
   (mapcat (fn [[p takes-val?]]
@@ -40,7 +41,8 @@
           [["level" true] ["fps" true] ["seconds" true] ["glyphs" true]
            ["paddle-speed" true] ["paddle-accel" true] ["mouse-gain" true]
            ["skip-card" false] ["autoplay" false] ["stats" false] ["all" false]
-           ["reset-progress" false] ["mute" false] ["music-gain" true] ["sound" true]]))
+           ["reset-progress" false] ["mute" false] ["music-gain" true] ["sound" true]
+           ["queue" true]]))
 
 (defn fail! [msg]
   (println (str "tesserae: " msg))
