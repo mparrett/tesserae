@@ -3,11 +3,11 @@
 Shipped on 2026-10-31: `tools/build-web-onevm.sh` is the Pages build, and the
 two-VM bridge is gone. What follows is how it got there.
 
-The shipped spike (`tools/build-web-audio.sh`) uses two VMs: the game in a
-worker sends EDN commands, and a second wasm on the page plays them
-([two-vm-bridge.html](two-vm-bridge.html)). This note records how the one-VM
-version was built and what it measured, so it can be rebuilt once its pieces
-are upstream.
+Until then the Pages build used two VMs (the since-removed
+`tools/build-web-audio.sh`): the game in a worker sent EDN commands, and a
+second wasm on the page played them ([two-vm-bridge.html](two-vm-bridge.html)).
+This note records how the one-VM version was built and what it measured.
+How the bridge came to ship first is in the DEVLOG's 2026-10-31 entry.
 
 ## Shape
 
@@ -91,10 +91,9 @@ white noise heard in all three is undertone's breeze patch, by design. The
 pages were slow to load on the phone; not yet diagnosed. Hit latency at each
 size wasn't reported, and desktop Safari is untried.
 
-So undertone main's 60 ms holds up on an idle phone but not under load in
-headless Chromium. Something between
-120 and 160 ms does in headless Chromium, which still has to be checked by
-ear on the phone and in Safari.
+So undertone main's 60 ms held up on an idle phone but not under load in
+headless Chromium, where 120–160 ms did. 120 ms became undertone's default in
+a worker (undertone#80), with `?queue=MS` to override it per device.
 
 ## TinyGo, for comparison
 
