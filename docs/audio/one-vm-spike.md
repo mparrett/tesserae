@@ -1,5 +1,8 @@
 # One-VM browser audio: spike notes
 
+Shipped on 2026-10-31: `tools/build-web-onevm.sh` is the Pages build, and the
+two-VM bridge is gone. What follows is how it got there.
+
 The shipped spike (`tools/build-web-audio.sh`) uses two VMs: the game in a
 worker sends EDN commands, and a second wasm on the page plays them
 ([two-vm-bridge.html](two-vm-bridge.html)). This note records how the one-VM
@@ -57,6 +60,41 @@ Serve OUT with `tools/coi-serve.py` (the ring needs cross-origin isolation).
 - A `BroadcastChannel` can't carry the ring: Chrome delivers a
   `SharedArrayBuffer` sent that way as `null`. Worker `postMessage` shares it.
 - Not yet heard by ear, nor tried in Safari or on iOS.
+
+## Rebuilt on let-go 18ce3194 and undertone 3fd695a (2026-10-31)
+
+`tools/build-web-onevm.sh` is the recipe above as a script (TinyGo by
+default, 2.7 MB). Undertone's browser queue is now hardcoded at 60 ms
+(`letgo/output_js.go`, undertone#79), tuned for the bridge on the page's
+main thread. Here the producer shares the worker with the game loop. The
+other queue sizes were built from a scratch copy of undertone with only that
+constant changed.
+
+Headless Chromium, `audio-probe.py` on `?level=3&skip-card&autoplay`, load
+average 4–5:
+
+| Queue | Run | Underrun quanta | Lowest queued |
+| --- | --- | --- | --- |
+| 60 ms | 40 s | 103, rising steadily | 0 ms |
+| 120 ms | 40 s / 90 s | 0 / 3 | 64 ms (90 s) |
+| 160 ms | 90 s, twice | 5280 / 0 | 0 / 96 ms |
+| 300 ms | 40 s | 0 | 258 ms |
+
+The startup underruns from 10-15 didn't recur at any size. The bad 160 ms
+run lined up with the machine's load climbing to about 9, and a main-thread
+evaluate took 484 ms. But 5280 quanta is about 15 s of silence, far longer
+than a GC pause, and the cause is unknown.
+
+By ear on an iPhone 13 Pro (Safari, over tailnet HTTPS, 2026-10-31), relayed
+through the undertone session: no crackles at 60, 120 or 160 ms. The wave of
+white noise heard in all three is undertone's breeze patch, by design. The
+pages were slow to load on the phone; not yet diagnosed. Hit latency at each
+size wasn't reported, and desktop Safari is untried.
+
+So undertone main's 60 ms holds up on an idle phone but not under load in
+headless Chromium. Something between
+120 and 160 ms does in headless Chromium, which still has to be checked by
+ear on the phone and in Safari.
 
 ## TinyGo, for comparison
 

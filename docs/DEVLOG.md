@@ -528,3 +528,20 @@ one conflict, in the ball draw call, and both sides were kept.
 - A capture matrix of font × density (1×, 2×, 3×) × window (phone landscape, laptop, desktop)
   showed the square-cell fix lands on 0.5 except where the cell height is odd, where it can
   only get within half a pixel (0.512 at 21×41).
+
+## 2026-10-31: browser sound moves to one VM
+
+- **decision (user): the browser build plays sound in one VM.** The game's own wasm links
+  undertone, which renders in the game's worker into a SharedArrayBuffer ring that
+  undertone's `page.js` plays (`tools/build-web-onevm.sh`). The two-VM bridge (a second
+  wasm on the page fed EDN commands) and its `?audiolab` panel are gone, and Pages no longer
+  pins undertone's `spike/tesserae-bridge` branch.
+- **decision (user): a 120 ms audio queue in the worker,** now undertone's default there
+  (undertone#80). `?queue=MS` overrides it per device.
+- **surprise:** undertone's 60 ms browser queue, tuned for the bridge on the page's main
+  thread, underran steadily in headless Chromium once the producer shared the worker with the
+  game. On an iPhone 13 Pro it was clean at 60, 120 and 160 ms. The sweep is in
+  `docs/audio/one-vm-spike.md`.
+- **note:** two of six headless 120 ms runs lost audio in bursts (up to about 4 s) while the
+  machine's load was around 6–7, and the bursts didn't recur at the same point in the game.
+  Unexplained; worth a look if real devices report dropouts.

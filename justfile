@@ -1,6 +1,8 @@
 # Local stand-in for CI: GitHub Actions only builds and deploys the Pages site
-# (.github/workflows/pages.yml), so `just ci` is the check to run before merging. Everything uses tools/lg-pinned, which
-# each checkout symlinks to its let-go binary (gitignored).
+# (.github/workflows/pages.yml), so `just ci` is the check to run before merging. The tests,
+# sim and stock web build use tools/lg-pinned, which each checkout symlinks to its let-go
+# binary (gitignored). Keep it at the let-go commit audio-host/go.mod pins, which is what the
+# Pages build compiles against, so the tests run the let-go that ships.
 
 default:
     @just --list
@@ -27,7 +29,7 @@ web out="dist/web": lg
     tools/build-web.sh {{out}}
 
 # The GitHub Pages site (browser build with sound), smoke-tested as Pages serves
-# it. UNDERTONE=<checkout> names undertone's bridge branch; see build-web-audio.sh.
-pages out="_site": lg
+# it. undertone and let-go come from audio-host/go.mod; see build-web-onevm.sh.
+pages out="_site":
     tools/build-pages.sh {{out}}
     uv run --with=playwright python tools/pages-smoke.py {{out}}

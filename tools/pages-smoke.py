@@ -1,7 +1,8 @@
 # pages-smoke.py <site-dir> — boot the Pages build the way GitHub Pages serves
 # it: no COOP/COEP headers, under a project subpath (/tesserae/). Passes when
 # the COI service worker has made the page cross-origin isolated, the game is
-# drawing frames, and undertone's bridge has started, with no page errors.
+# drawing frames, and undertone's page.js has built its worklet node from the
+# ring the game's worker posted, with no page errors.
 #   uv run --with=playwright python tools/pages-smoke.py _site
 import functools, http.server, os, sys, tempfile, threading, time
 from playwright.sync_api import sync_playwright, Error as PWError
@@ -42,6 +43,10 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1400, "height": 900})
     page.on("pageerror", lambda e: errors.append(str(e).split("\n")[0]))
     page.on("console", lambda m: m.type == "error" and errors.append(m.text[:200]))
+    # Count the worklet nodes page.js builds. Without a gesture the context
+    # stays suspended, but the node is built as soon as the ring arrives.
+    page.add_init_script("""(() => { const N = window.AudioWorkletNode; if (!N) return; window._utNodes = 0;
+        window.AudioWorkletNode = function (c, name, o) { if (name === 'undertone-shared') window._utNodes++; return new N(c, name, o); }; })();""")
     page.goto(url, wait_until="domcontentloaded")
     if not poll(page, "self.crossOriginIsolated", 30):
         fails.append("page never became cross-origin isolated")
@@ -52,8 +57,8 @@ with sync_playwright() as p:
             t.write = (s, cb) => { if (typeof s === 'string' && s.includes('\\x1b[?2026h')) window._frames++; return w(s, cb); }; }""")
         if not poll(page, "window._frames > 5", 60):
             fails.append("game drew no frames")
-    if not poll(page, "!!window.undertoneBridge", 60):
-        fails.append("undertone bridge never started")
+    if not poll(page, "window._utNodes > 0", 60):
+        fails.append("undertone's audio ring never reached the page")
     browser.close()
 httpd.shutdown()
 
