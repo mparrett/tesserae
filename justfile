@@ -27,7 +27,7 @@ web out="dist/web": lg
     tools/build-web.sh {{out}}
 
 # The GitHub Pages site (browser build with sound), smoke-tested as Pages serves
-# it. UNDERTONE=<checkout> names undertone's bridge branch; see build-web-audio.sh.
+# it. undertone and let-go come from audio-host/go.mod; see build-web-onevm.sh.
 pages out="_site": lg
     tools/build-pages.sh {{out}}
     uv run --with=playwright python tools/pages-smoke.py {{out}}

@@ -3,8 +3,8 @@
 # game's own wasm links undertone (audio-host's module, through lg -w
 # -w-module/-import), renders in the game's worker into a SharedArrayBuffer
 # ring, and posts it to the page, where undertone's webaudio/page.js owns the
-# AudioContext and the worklet. No second wasm and no EDN hop, unlike
-# build-web-audio.sh's bridge. See docs/audio/one-vm-spike.md.
+# AudioContext and the worklet. It replaced the two-VM bridge (a second wasm
+# on the page) on 2026-10-31; see docs/audio/one-vm-spike.md.
 #
 # page.js wraps window.Worker to hear the ring, so it is injected into <head>,
 # ahead of the runtime's script.
@@ -14,8 +14,8 @@
 # isolation: serve with tools/coi-serve.py, or rely on the COI service worker
 # lg -w ships (as on Pages).
 #
-# Env: UNDERTONE (undertone checkout for page.js; default ../undertone beside
-#      the canonical checkout), GO, TESS_STORAGE_ID.
+# undertone's version is audio-host/go.mod's; let-go's too, for the wasm.
+# Env: GO, TESS_STORAGE_ID.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 host="$here/audio-host"

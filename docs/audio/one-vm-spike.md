@@ -1,5 +1,8 @@
 # One-VM browser audio: spike notes
 
+Shipped on 2026-10-31: `tools/build-web-onevm.sh` is the Pages build, and the
+two-VM bridge is gone. What follows is how it got there.
+
 The shipped spike (`tools/build-web-audio.sh`) uses two VMs: the game in a
 worker sends EDN commands, and a second wasm on the page plays them
 ([two-vm-bridge.html](two-vm-bridge.html)). This note records how the one-VM

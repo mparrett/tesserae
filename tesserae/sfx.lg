@@ -11,26 +11,21 @@
    runtime only when audio exists (undertone registers that namespace's
    source at init, so no source path is needed).
 
-   In the browser the game runs in a Web Worker, which can't open audio, so
-   the same commands go to the page as EDN over js/emit, where undertone's
-   bridge (cmd/undertone-bridge, added by tools/build-web-audio.sh) plays
-   them. Without the bridge on the page the events have no listener."
+   The browser build with sound (tools/build-web-onevm.sh) links undertone
+   into the game's own wasm, so it takes the same :native path: undertone
+   renders in the game's worker and its page.js plays the ring. A stock
+   browser build has no sound."
   (:require [js]))
 
 (defn- native [sym] (when-let [v (resolve sym)] @v))
 
-;; :native when this lg links undertone, :bridge in a browser bundle, else nil.
+;; :native when this lg links undertone (natively or in the browser), else nil.
 (def ^:private backend
-  (cond (native 'undertone/trigger) :native
-        *in-wasm* :bridge
-        :else nil))
-
-(defn- emit! [cmd] (js/emit "undertone" {:form (pr-str cmd)}))
+  (when (native 'undertone/trigger) :native))
 
 (defn- trigger* [m]
   (case backend
     :native ((native 'undertone/trigger) m)
-    :bridge (emit! [:trigger m])
     nil))
 
 (def on? (atom false))
@@ -71,14 +66,12 @@
     (case backend
       :native ((native 'undertone/set-parameters)
                ((native 'undertone.ambience/derive-mood) mood seed level tension))
-      :bridge (emit! (into [:score] sc))
       nil)))
 
 (defn- push-music-gain! []
   (let [g (if (contains? #{:all :music} @mode) @music-gain 0.0)]
     (case backend
       :native ((native 'undertone/set-music-gain) g)
-      :bridge (emit! [:music-gain g])
       nil)))
 
 (defn set-mode!
@@ -104,16 +97,14 @@
     (when (= backend :native) (require 'undertone.ambience))
     (reset! mode (get o :sound :all))
     (push-music-gain!)
-    ;; tells the page there is sound, so it shows the touch pad's sound button;
-    ;; in a one-VM build the backend is :native but the page still listens
+    ;; tells the page there is sound, so it shows the touch pad's sound button
     (when *in-wasm* (js/emit "tesserae-sound" {:mode (name @mode)}))
-    ;; ?queue= tunes the browser's audio queue per device. Native ignores it,
-    ;; and undertone versions without set-queue don't resolve it.
-    (when-let [q (and (= backend :native) (:queue o))]
+    ;; ?queue= tunes the browser's audio queue per device, before the device
+    ;; opens on music-start.
+    (when-let [q (and *in-wasm* (:queue o))]
       (when-let [f (native 'undertone/set-queue)] (f q)))
     (reset! score-state [:aurora 1 0 0.0])
     (push-score!)
-    ;; the bridge opens its own device at page load and starts on a gesture
     (when (= backend :native) ((native 'undertone/music-start)))))
 
 (defn stop! []

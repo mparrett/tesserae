@@ -23,14 +23,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The let-go commit tools/lg-pinned is built from locally (lg-d1cf4277ed);
-  # bump the two together.
-  LETGO_SHA: d1cf4277ed1207e0dddecff3a52b3ee6abca863c
-  # undertone's page bridge (cmd/undertone-bridge) lives on its
-  # spike/tesserae-bridge branch; this is that branch's head as of 2026-10-27.
-  UNDERTONE_SHA: 7ddbe43337904ed9572783364f9625ccef316ee0
-  # build-web-audio.sh builds the bridge with TinyGo, which needs 0.43's
-  # -stack-size fix (see the comment there).
+  # let-go and undertone are pinned by audio-host/go.mod and fetched through the
+  # Go module proxy; build-web-onevm.sh builds the lg that compiles the bundle.
+  # The bundle is built with TinyGo (pinned here; 0.43 is what it was measured with).
   TINYGO_VERSION: 0.43.0
 
 jobs:
@@ -40,16 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch let-go and undertone (pinned)
-        run: |
-          git clone --filter=blob:none https://github.com/nooga/let-go "$RUNNER_TEMP/let-go"
-          git -C "$RUNNER_TEMP/let-go" checkout "$LETGO_SHA"
-          git clone --filter=blob:none https://github.com/mparrett/undertone "$RUNNER_TEMP/undertone"
-          git -C "$RUNNER_TEMP/undertone" checkout "$UNDERTONE_SHA"
-
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ runner.temp }}/let-go/go.mod
+          go-version-file: audio-host/go.mod
+          cache-dependency-path: audio-host/go.sum
 
       - name: Install TinyGo (pinned)
         run: |
@@ -59,15 +48,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/tinygo.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/tinygo/bin" >> "$GITHUB_PATH"
 
-      - name: Build let-go
-        run: |
-          make -C "$RUNNER_TEMP/let-go" build
-          ln -s "$RUNNER_TEMP/let-go/bin/lg" tools/lg-pinned
-
       - name: Build the Pages site
-        env:
-          LETGO_SRC: ${{ runner.temp }}/let-go
-          UNDERTONE: ${{ runner.temp }}/undertone
         run: tools/build-pages.sh _site
 
       - uses: actions/setup-python@v5

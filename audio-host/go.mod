@@ -3,7 +3,7 @@ module tesserae/audiohost
 go 1.27
 
 require (
-	github.com/mparrett/undertone v0.1.1-0.20261027052930-3fd695a7e8e7
+	github.com/mparrett/undertone v0.1.1-0.20261031171454-4e50fe9fad0e
 	github.com/nooga/let-go v1.13.1-0.20261031152300-18ce3194c90e
 )
 
