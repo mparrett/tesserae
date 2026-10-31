@@ -548,12 +548,13 @@ one conflict, in the ball draw call, and both sides were kept.
 - **surprise: one-VM could have shipped first.** Everything it needed was merged by 10-21:
   let-go#1037 (`-import`, 10-09), #1064 (embedded lg sources, 10-17), #1077 (TinyGo under
   `-w-module`, 10-21) and #1079/#1080 (storage from the worker, 10-21), plus undertone#29
-  (10-17) and worker mode #45 (10-20). Browser sound first shipped on 10-27 (tesserae#6) and
+  (10-17) and worker mode undertone#45 (10-20). Browser sound first shipped on 10-27 (tesserae#6) and
   went to Pages on 10-28 (#7), both on the bridge. No decision between the two is recorded:
   #6 lists both spike notes without choosing, and this log has no entry. What the record
   shows is that the bridge was the build that worked and had been tuned (the 10-26 iPhone
-  `?audiolab` runs, undertone#79's 60 ms, and TinyGo vs Go on 10-29), while one-VM had one
-  short phone listen behind it (10-18). Nobody went back to it once main could build it.
+  `?audiolab` runs, undertone#79's 60 ms, and TinyGo vs Go on 10-29), while one-VM had two
+  headless probes (10-15, and 10-17 under a load of about 17) and one short phone listen
+  (10-18) behind it. Nobody went back to it once main could build it.
   Retiring the bridge was then framed as waiting for let-go's browser audio backend
   (undertone#42), which one-VM doesn't use.
 - **lesson:** when a spike's blockers merge, re-run its test then, and don't let it wait on a

@@ -92,8 +92,10 @@ pages were slow to load on the phone; not yet diagnosed. Hit latency at each
 size wasn't reported, and desktop Safari is untried.
 
 So undertone main's 60 ms held up on an idle phone but not under load in
-headless Chromium, where 120–160 ms did. 120 ms became undertone's default in
-a worker (undertone#80), with `?queue=MS` to override it per device.
+headless Chromium. 120 ms was clean in most headless runs, though two of six
+lost audio in bursts (see the DEVLOG's 2026-10-31 entry), and 160 ms had one
+long dropout. 120 ms became undertone's default in a worker (undertone#80),
+with `?queue=MS` to override it per device.
 
 ## TinyGo, for comparison
 
