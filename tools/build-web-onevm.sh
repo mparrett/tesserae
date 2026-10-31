@@ -24,7 +24,9 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
 # page.js must match the undertone version audio-host links, so take it from
-# the module cache at that version rather than from a checkout.
+# the module cache at that version rather than from a checkout. go list prints
+# an empty Dir until the module is downloaded, as on a fresh CI runner.
+(cd "$host" && go mod download github.com/mparrett/undertone)
 ut_dir="$(cd "$host" && go list -m -f '{{.Dir}}' github.com/mparrett/undertone)"
 [[ -s "$ut_dir/webaudio/page.js" ]] || { echo "build-web-onevm: no webaudio/page.js in $ut_dir" >&2; exit 1; }
 
