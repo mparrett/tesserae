@@ -58,6 +58,34 @@ Serve OUT with `tools/coi-serve.py` (the ring needs cross-origin isolation).
   `SharedArrayBuffer` sent that way as `null`. Worker `postMessage` shares it.
 - Not yet heard by ear, nor tried in Safari or on iOS.
 
+## Rebuilt on let-go 18ce3194 and undertone 3fd695a (2026-10-31)
+
+`tools/build-web-onevm.sh` is the recipe above as a script (TinyGo by
+default, 2.7 MB). Undertone's browser queue is now hardcoded at 60 ms
+(`letgo/output_js.go`, undertone#79), tuned for the bridge on the page's
+main thread. Here the producer shares the worker with the game loop. The
+other queue sizes were built from a scratch copy of undertone with only that
+constant changed.
+
+Headless Chromium, `audio-probe.py` on `?level=3&skip-card&autoplay`, load
+average 4–5:
+
+| Queue | Run | Underrun quanta | Lowest queued |
+| --- | --- | --- | --- |
+| 60 ms | 40 s | 103, rising steadily | 0 ms |
+| 120 ms | 40 s / 90 s | 0 / 3 | 64 ms (90 s) |
+| 160 ms | 90 s, twice | 5280 / 0 | 0 / 96 ms |
+| 300 ms | 40 s | 0 | 258 ms |
+
+The startup underruns from 10-15 didn't recur at any size. The bad 160 ms
+run lined up with the machine's load climbing to about 9, and a main-thread
+evaluate took 484 ms. But 5280 quanta is about 15 s of silence, far longer
+than a GC pause, and the cause is unknown.
+
+So undertone main's 60 ms doesn't hold up under one-VM. Something between
+120 and 160 ms does in headless Chromium, which still has to be checked by
+ear on the phone and in Safari.
+
 ## TinyGo, for comparison
 
 As of 2026-10-15 TinyGo couldn't build this path: let-go's `-w-module`
