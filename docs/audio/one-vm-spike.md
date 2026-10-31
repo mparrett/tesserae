@@ -82,7 +82,14 @@ run lined up with the machine's load climbing to about 9, and a main-thread
 evaluate took 484 ms. But 5280 quanta is about 15 s of silence, far longer
 than a GC pause, and the cause is unknown.
 
-So undertone main's 60 ms doesn't hold up under one-VM. Something between
+By ear on an iPhone 13 Pro (Safari, over tailnet HTTPS, 2026-10-31), relayed
+through the undertone session: no crackles at 60, 120 or 160 ms. The wave of
+white noise heard in all three is undertone's breeze patch, by design. The
+pages were slow to load on the phone; not yet diagnosed. Hit latency at each
+size wasn't reported, and desktop Safari is untried.
+
+So undertone main's 60 ms holds up on an idle phone but not under load in
+headless Chromium. Something between
 120 and 160 ms does in headless Chromium, which still has to be checked by
 ear on the phone and in Safari.
 
