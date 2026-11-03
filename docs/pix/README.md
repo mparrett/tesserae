@@ -3,7 +3,10 @@
 A spike on `wt/ebiten-spike` asking whether the game looks better as real
 pixels with shaders, without touching its simulation. The game itself is
 unchanged except at the seams below; on a stock `lg` every seam resolves to nil
-and the terminal build runs as before (`just test` passes on both).
+and the terminal build runs as before. `just test` passes on stock `lg`. Under
+`LG=pix-host/lg` one test fails, `sfx_test`'s no-backend case: it expects no
+audio, and pix-host links undertone. Main's `audio-host/lg` fails it the same
+way (as of 2026-11-02).
 
 ![play](play.png)
 

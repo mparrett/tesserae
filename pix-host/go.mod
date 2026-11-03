@@ -4,8 +4,8 @@ go 1.27
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.10.2
-	github.com/mparrett/undertone v0.1.1-0.20261027044516-59bd2d8b20ad
-	github.com/nooga/let-go v1.13.1-0.20261028065344-d1cf4277ed12
+	github.com/mparrett/undertone v0.1.1-0.20261031171454-4e50fe9fad0e
+	github.com/nooga/let-go v1.13.1-0.20261031152300-18ce3194c90e
 	golang.org/x/image v0.46.0
 )
 
