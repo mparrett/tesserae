@@ -36,7 +36,11 @@ a = ap.parse_args()
 HOOK = """() => {
   const t = window._tessTerm, w = t.write.bind(t);
   window._ts = [];
-  t.write = (s, cb) => { if (typeof s === 'string' && s.includes('\\x1b[?2026h')) window._ts.push(performance.now()); return w(s, cb); };
+  t.write = (s, cb) => {
+    // a write the page fell behind on can carry several frames; count each
+    if (typeof s === 'string') for (let k = s.split('\\x1b[?2026h').length - 1, now = performance.now(); k > 0; k--) window._ts.push(now);
+    return w(s, cb);
+  };
 }"""
 
 with sync_playwright() as pw:
@@ -44,14 +48,22 @@ with sync_playwright() as pw:
                            args=["--autoplay-policy=no-user-gesture-required"])
     page = b.new_page(viewport={"width": 1400, "height": 900})
     page.goto(a.url, wait_until="commit")
-    page.wait_for_function("() => window._tessTerm", timeout=60000)
-    page.wait_for_timeout(4000)  # the COI service worker may reload once
-    page.wait_for_function("() => window._tessTerm", timeout=60000)
-    page.mouse.click(700, 450)  # the gesture undertone waits for
+    # On a host without COOP/COEP (Pages) the COI service worker reloads the
+    # page once; isolation is only true after that reload, so the hook below
+    # can't land on a page that is about to go away.
+    page.wait_for_function("() => self.crossOriginIsolated && window._tessTerm", timeout=60000)
+    # The autoplay flag above already lets the AudioContext run (checked
+    # 2026-11-02). The keyup is a backstop for undertone's page.js, which also
+    # unlocks on a keyup anywhere in the document. No real click: xterm would
+    # pass it to the game as a :click, which launches the ball at a moment
+    # that varies with load, so runs would stop being comparable.
+    page.evaluate("() => document.dispatchEvent(new Event('keyup'))")
     page.wait_for_timeout(2000)
     page.evaluate(HOOK)
     page.wait_for_timeout(a.secs * 1000)
-    ts = page.evaluate("() => window._ts")
+    ts = page.evaluate("() => window._ts ?? null")
+    if ts is None:
+        raise SystemExit("frame-probe: the page reloaded during the run, so the hook was lost; rerun")
     grid = page.evaluate("() => [window._tessTerm.cols, window._tessTerm.rows, window._tessTerm.options.fontSize]")
     b.close()
 
