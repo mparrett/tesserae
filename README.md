@@ -205,6 +205,7 @@ It's published at <https://matt.parrett.us/tesserae/>, with sound: every push to
 NO_BUILD=1 ./tools/serve-web.sh 8361   # serve the existing build on another port
 ./tools/build-web.sh [outdir]   # build only (default dist/web, about 1 min, behind tools/heavy.sh)
 node tools/web-shot.mjs http://127.0.0.1:8360/ /tmp/shot 6   # headless check (needs playwright; PW_MODULE=<path> to point at an install)
+uv run --with=playwright python tools/frame-probe.py 'http://127.0.0.1:8360/?level=1&skip-card&autoplay&grid=large' --headed --channel chrome   # frames produced vs painted
 ```
 
 ![browser](docs/captures/v2-web-play.png)
