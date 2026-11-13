@@ -13,9 +13,9 @@
 
    The browser build with sound (tools/build-web-onevm.sh) links undertone
    into the game's own wasm, so it takes the same :native path: undertone
-   renders in the game's worker and its page.js plays the ring, or, in a
-   SEAM=1 build (lg -w -w-audio), let-go's own browser audio does. A stock
-   browser build has no sound."
+   renders in the game's worker and let-go's own browser audio (lg -w
+   -w-audio) plays it, or, in a PAGEJS=1 build, undertone's page.js plays the
+   ring. A stock browser build has no sound."
   (:require [js]))
 
 (defn- native [sym] (when-let [v (resolve sym)] @v))
@@ -101,8 +101,8 @@
     ;; tells the page there is sound, so it shows the touch pad's sound button
     (when *in-wasm* (js/emit "tesserae-sound" {:mode (name @mode)}))
     ;; ?queue= tunes the browser's audio queue per device, before the device
-    ;; opens on music-start. Only a PAGEJS=1 build has undertone/set-queue;
-    ;; the default build plays through let-go's audio, whose queue is its own.
+    ;; opens on music-start. Only a PAGEJS=1 build honours it: in the default
+    ;; build undertone/set-queue is a no-op, since let-go's audio owns the queue.
     (when-let [q (and *in-wasm* (:queue o))]
       (when-let [f (native 'undertone/set-queue)] (f q)))
     (reset! score-state [:aurora 1 0 0.0])

@@ -3,13 +3,16 @@
 # the COI service worker has made the page cross-origin isolated, the game is
 # drawing frames, and the audio worklet node is built, with no page errors.
 # The node is let-go's lg-audio-shared, or undertone-shared in a PAGEJS=1
-# build (the site then carries undertone-page.js).
+# build (its index.html then loads undertone-page.js).
 #   uv run --with=playwright python tools/pages-smoke.py _site
 import functools, http.server, os, sys, tempfile, threading, time
 from playwright.sync_api import sync_playwright, Error as PWError
 
 site = os.path.abspath(sys.argv[1])
-worklet = "undertone-shared" if os.path.exists(os.path.join(site, "undertone-page.js")) else "lg-audio-shared"
+# Ask index.html rather than the dir: build-web-onevm.sh doesn't clear its
+# outdir, so a PAGEJS=1 build can leave an undertone-page.js behind.
+with open(os.path.join(site, "index.html"), encoding="utf-8") as f:
+    worklet = "undertone-shared" if 'src="undertone-page.js"' in f.read() else "lg-audio-shared"
 root = tempfile.mkdtemp()
 os.symlink(site, os.path.join(root, "tesserae"))
 
