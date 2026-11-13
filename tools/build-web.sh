@@ -12,10 +12,11 @@
 # commit, fetched through the Go module proxy (or LETGO_SRC=<checkout>).
 # It's CPU-heavy, so it runs behind tools/heavy.sh.
 #
-# Env: LG (default tools/lg-pinned), LETGO_SRC (optional local let-go checkout),
+# Env: LG (default tools/lg-pinned, built by tools/build-lg.sh), LETGO_SRC (optional local let-go checkout),
 #      TESS_STORAGE_ID (localStorage store id, default tesserae).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
+[[ -n ${LG:-} ]] || "$here/tools/build-lg.sh" || exit 1  # lg-pinned at audio-host/go.mod's let-go
 LG="${LG:-$here/tools/lg-pinned}"
 out="${1:-$here/dist/web}"
 mkdir -p "$out"
