@@ -1,8 +1,8 @@
 # Local stand-in for CI: GitHub Actions only builds and deploys the Pages site
 # (.github/workflows/pages.yml), so `just ci` is the check to run before merging. The tests,
-# sim and stock web build use tools/lg-pinned, which each checkout symlinks to its let-go
-# binary (gitignored). Keep it at the let-go commit audio-host/go.mod pins, which is what the
-# Pages build compiles against, so the tests run the let-go that ships.
+# sim and stock web build use tools/lg-pinned, a stock lg that tools/build-lg.sh builds from
+# the let-go version audio-host/go.mod pins (gitignored). The Pages build compiles against the
+# same go.mod, so the tests run the let-go that ships. LG=/path/to/lg runs another let-go.
 
 default:
     @just --list
@@ -10,10 +10,10 @@ default:
 # Everything a merge should pass: tests, a simulator pass, the web build.
 ci: lg test sim web
 
-# Fail early, with a hint, when this checkout has no tools/lg-pinned.
+# Point tools/lg-pinned at audio-host/go.mod's let-go, building it on first use.
 [private]
 lg:
-    @test -x tools/lg-pinned || { echo "tools/lg-pinned is missing: symlink it to a let-go binary (ln -s /path/to/lg tools/lg-pinned)" >&2; exit 1; }
+    @[ -n "${LG:-}" ] || tools/build-lg.sh
 
 # The test suites (test/*.lg); args pass through to test/run.lg.
 test *args: lg
@@ -22,7 +22,7 @@ test *args: lg
 # Every level for a few game-seconds under the autopilot. The tests don't
 # load tools/sim.lg, so this is what catches it falling behind the game.
 sim secs="5": lg
-    ./tools/lg-pinned -source-paths . tools/sim.lg --secs {{secs}}
+    "${LG:-./tools/lg-pinned}" -source-paths . tools/sim.lg --secs {{secs}}
 
 # The browser build (compiles main.lg and every namespace it loads).
 web out="dist/web": lg

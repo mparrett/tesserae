@@ -1,4 +1,6 @@
 tools/lg-pinned
+# lg builds per let-go version (tools/build-lg.sh)
+tools/.lg/
 *.ans
 dist/
 tools/fonts/.cache/
