@@ -8,7 +8,8 @@
 # adds the headers, so the page ends up cross-origin isolated (the
 # SharedArrayBuffer input ring and undertone's audio ring need it).
 #
-# Env: as build-web-onevm.sh (GO, TESS_STORAGE_ID).
+# Env: as build-web-onevm.sh (GO, TESS_STORAGE_ID). Pages stays on undertone's
+# page.js until the SEAM=1 build has had a phone listen, so SEAM is cleared.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$here/_site}"
@@ -18,7 +19,7 @@ if [[ -d "$out" && -n "$(ls -A "$out")" && ! -e "$out/.nojekyll" ]]; then
   echo "build-pages: $out isn't empty and isn't a previous site; refusing to clear it" >&2; exit 1
 fi
 rm -rf "$out"
-"$here/tools/build-web-onevm.sh" "$out"
+SEAM= "$here/tools/build-web-onevm.sh" "$out"
 touch "$out/.nojekyll"
 missing=0
 for f in index.html coi-serviceworker.js undertone-page.js; do

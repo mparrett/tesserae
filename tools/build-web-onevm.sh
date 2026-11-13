@@ -29,7 +29,7 @@ out="${1:-$here/dist/web-onevm}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
-seam=; [[ -n "${SEAM:-}" ]] && seam=1
+seam=; [[ "${SEAM:-}" == 1 ]] && seam=1
 shell="$here/web/shell.html"
 audio_flags=()
 if [[ -n $seam ]]; then
