@@ -11,7 +11,7 @@ import (
 	"github.com/mparrett/undertone/letgo"
 )
 
-var version, commit = "dev", "18ce319+undertone"
+var version, commit = "dev", "c666589+undertone"
 
 func main() {
 	_ = letgo.CurrentMusic() // the import registers the audio namespace
