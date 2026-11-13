@@ -119,12 +119,12 @@ That is a single listen, not a measurement. The headless underrun probe from
 2026-10-17 ran under a load average of about 17, so it still needs a rerun on
 a quiet machine.
 
-## let-go's own browser audio, behind SEAM=1 (2026-11-13)
+## let-go's own browser audio (SEAM=1 on 2026-11-13, the default since)
 
 undertone #86 (21c3a12) streams the music into let-go's browser device when a
 bundle is built with `lg -w -w-audio` (let-go #1112), so `page.js` and
-undertone's worklet drop out. `SEAM=1 tools/build-web-onevm.sh` builds that
-way. It stays opt-in until it has had a phone listen; Pages keeps `page.js`.
+undertone's worklet drop out. `SEAM=1 tools/build-web-onevm.sh` built that
+way, opt-in until it had a phone listen, while Pages kept `page.js`.
 
 On the seam path the queue is let-go's (120 ms in a worker), so
 `undertone/set-queue`, and with it `--queue` and `?queue=`, does nothing.
@@ -140,3 +140,8 @@ Headless Chromium, TinyGo, `?level=3&skip-card&autoplay`, load average about
 The peaks are 12 s of music each, not a level match. `-w-audio` adds 18 KB to
 the TinyGo `index.html` (2.86 MB). Not yet heard on a phone, in Safari or in
 Firefox.
+
+Matt listened to both builds on his phone and on desktop on 2026-11-13: neither
+crackled, and the level difference wasn't worth acting on. let-go's audio became
+the default; `PAGEJS=1` builds the `page.js` way for rollback, and `?queue=`
+only does anything in that build.

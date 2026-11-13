@@ -1,13 +1,15 @@
 # pages-smoke.py <site-dir> — boot the Pages build the way GitHub Pages serves
 # it: no COOP/COEP headers, under a project subpath (/tesserae/). Passes when
 # the COI service worker has made the page cross-origin isolated, the game is
-# drawing frames, and undertone's page.js has built its worklet node from the
-# ring the game's worker posted, with no page errors.
+# drawing frames, and the audio worklet node is built, with no page errors.
+# The node is let-go's lg-audio-shared, or undertone-shared in a PAGEJS=1
+# build (the site then carries undertone-page.js).
 #   uv run --with=playwright python tools/pages-smoke.py _site
 import functools, http.server, os, sys, tempfile, threading, time
 from playwright.sync_api import sync_playwright, Error as PWError
 
 site = os.path.abspath(sys.argv[1])
+worklet = "undertone-shared" if os.path.exists(os.path.join(site, "undertone-page.js")) else "lg-audio-shared"
 root = tempfile.mkdtemp()
 os.symlink(site, os.path.join(root, "tesserae"))
 
@@ -43,10 +45,10 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1400, "height": 900})
     page.on("pageerror", lambda e: errors.append(str(e).split("\n")[0]))
     page.on("console", lambda m: m.type == "error" and errors.append(m.text[:200]))
-    # Count the worklet nodes page.js builds. Without a gesture the context
-    # stays suspended, but the node is built as soon as the ring arrives.
+    # Count the audio worklet nodes built. Without a gesture the context
+    # stays suspended, but the node is built as soon as the audio starts.
     page.add_init_script("""(() => { const N = window.AudioWorkletNode; if (!N) return; window._utNodes = 0;
-        window.AudioWorkletNode = function (c, name, o) { if (name === 'undertone-shared') window._utNodes++; return new N(c, name, o); }; })();""")
+        window.AudioWorkletNode = function (c, name, o) { if (name === '%s') window._utNodes++; return new N(c, name, o); }; })();""" % worklet)
     page.goto(url, wait_until="domcontentloaded")
     if not poll(page, "self.crossOriginIsolated", 30):
         fails.append("page never became cross-origin isolated")
@@ -58,7 +60,7 @@ with sync_playwright() as p:
         if not poll(page, "window._frames > 5", 60):
             fails.append("game drew no frames")
     if not poll(page, "window._utNodes > 0", 60):
-        fails.append("undertone's audio ring never reached the page")
+        fails.append(f"no {worklet} audio worklet was built")
     browser.close()
 httpd.shutdown()
 

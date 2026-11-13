@@ -101,8 +101,8 @@
     ;; tells the page there is sound, so it shows the touch pad's sound button
     (when *in-wasm* (js/emit "tesserae-sound" {:mode (name @mode)}))
     ;; ?queue= tunes the browser's audio queue per device, before the device
-    ;; opens on music-start. A SEAM=1 build has no undertone/set-queue (the
-    ;; queue is let-go's), so there it does nothing.
+    ;; opens on music-start. Only a PAGEJS=1 build has undertone/set-queue;
+    ;; the default build plays through let-go's audio, whose queue is its own.
     (when-let [q (and *in-wasm* (:queue o))]
       (when-let [f (native 'undertone/set-queue)] (f q)))
     (reset! score-state [:aurora 1 0 0.0])
