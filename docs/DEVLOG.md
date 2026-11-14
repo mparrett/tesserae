@@ -559,3 +559,23 @@ one conflict, in the ball draw call, and both sides were kept.
   (undertone#42), which one-VM doesn't use.
 - **lesson:** when a spike's blockers merge, re-run its test then, and don't let it wait on a
   milestone it doesn't depend on.
+
+## 2026-11-13: let-go's browser audio by default; lg-pinned from go.mod
+
+- **decision: the Pages build plays through let-go's own audio** (`build-web-onevm.sh`
+  and `build-pages.sh`: `lg -w -w-audio`, `lg-audio-shared`), not undertone's `page.js` (#14). Matt listened to both builds on his
+  phone and on desktop: neither crackled, and no level difference was worth acting on.
+  (Headless output peaks were 0.21 vs 0.27, but over different music, so not a level match.) `PAGEJS=1` builds the `page.js` way for
+  rollback. `?queue=` / `--queue` only does anything there: let-go's queue (120 ms, in a
+  worker) has no guest-side setting. The details are in `docs/audio/one-vm-spike.md`.
+- **surprise:** the first phone visit to Pages after the deploy played audio but ignored
+  taps; a reload fixed it, and the same build served from the tailnet worked. The likely
+  cause is the COI service worker's one-time reload on a first visit. Not reproduced.
+- **decision: `tools/lg-pinned` is built, not hand-linked** (#15). `tools/build-lg.sh`
+  builds a stock lg at the let-go version `audio-host/go.mod` pins into
+  `tools/.lg/lg-<version>`, and `just`, `test.sh`, `play.sh` and `build-web.sh` call it
+  unless `LG` is set. go.mod is now the only place the let-go version is written; before,
+  the tests could run a different let-go than the Pages build. The tests, sim and builds no
+  longer use `3p/lg-bin`, which was pruned to the release builds and the spikes' targets.
+  **deferral:** `tools/build-aot.sh` still defaults its output to `../lg-bin/` (that is,
+  `~/projects-new/lg-bin`, which doesn't exist); pass `--out` until that default moves.
