@@ -44,7 +44,11 @@ game="$(cd "$(dirname "$0")/.." && pwd)"
 # The workspace this checkout lives in. Taken from the main checkout's .git,
 # not $game/.., which from a worktree (.claude/worktrees/<name>) is the wrong
 # directory and let the canonical-checkout guard below miss.
-ws="$(dirname "$(dirname "$(git -C "$game" rev-parse --path-format=absolute --git-common-dir)")")"
+# Its own assignment, so a failed git aborts instead of leaving dirname to turn
+# the empty result into "." and the guard checking the wrong directories.
+common="$(git -C "$game" rev-parse --path-format=absolute --git-common-dir)" &&
+  [[ $common == /* ]] || { echo "build-aot: can't find this checkout's git dir; is $game a git checkout (git 2.31+)?" >&2; exit 2; }
+ws="$(dirname "$(dirname "$common")")"
 letgo="${TESSERAE_AOT_LETGO:-$ws/worktrees/let-go-tesserae-aot}"
 out="${TESSERAE_AOT_OUT:-$game/tools/.lg/lg-tesserae-aot}"
 host_lg=""
@@ -61,13 +65,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ ${#nss[@]} -gt 0 ]] || nss=(tesserae.gfx tesserae.world)
-letgo="$(cd "$letgo" && pwd)"
+# -P on both sides of the guard's comparison, so a symlinked path to the
+# canonical checkout can't slip past it.
+letgo="$(cd "$letgo" && pwd -P)"
 mkdir -p "$(dirname "$out")"
 out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
 # The canonical checkout is 3p/let-go in this workspace; ../let-go is the older
 # layout. Either one is refused.
-for canonical in ${TESSERAE_LETGO_CANONICAL:-} "$ws/3p/let-go" "$ws/let-go"; do
-  [[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout ($canonical)" >&2; exit 2; }
+canonicals=("$ws/3p/let-go" "$ws/let-go")
+[[ -z ${TESSERAE_LETGO_CANONICAL:-} ]] || canonicals+=("$TESSERAE_LETGO_CANONICAL")
+for canonical in "${canonicals[@]}"; do
+  [[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd -P)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout ($canonical)" >&2; exit 2; }
 done
 [[ -f "$letgo/lg.go" ]] || { echo "build-aot: $letgo is not a let-go checkout" >&2; exit 2; }
 
@@ -75,9 +83,11 @@ gen_root="$letgo/pkg/rt/core_go_lowered"
 gen_dir="$gen_root/tesserae"
 wireup="$letgo/zz_lg_tesserae_gen.go"
 profhook="$letgo/zz_lg_tesserae_prof.go"
-log="$(mktemp -t build-aot.XXXXXX)"
+log="$(mktemp -t build-aot.XXXXXX)"   # kept: the last line prints its path
+verify=""
 
 cleanup() {
+  [[ -z $verify ]] || rm -rf "$(dirname "$verify")"
   if [[ $keep -eq 0 ]]; then
     rm -f "$wireup" "$profhook"
     rm -rf "$gen_dir"
@@ -174,7 +184,6 @@ verify="$(mktemp -d -t build-aot-verify.XXXXXX)/verify.lg"
   echo "      (println (if (re-find #\"native-fn\" (str v)) \"NATIVE\" \"BYTECODE\") (str nsn \"/\" n)))))"
 } >"$verify"
 vout="$(cd "$game" && "$out" -source-paths "$game" "$verify" 2>&1)" || { echo "$vout"; echo "build-aot: verify run failed" >&2; exit 1; }
-rm -rf "$(dirname "$verify")"
 echo "$vout" | grep '^BYTECODE' || true
 nat=$(echo "$vout" | grep -c '^NATIVE' || true)
 byc=$(echo "$vout" | grep -c '^BYTECODE' || true)
