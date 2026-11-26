@@ -252,11 +252,10 @@ git clone https://github.com/mparrett/let-go.git ../let-go-tesserae-aot
 git -C ../let-go-tesserae-aot checkout wt/tesserae-aot
 
 # 2. build the binary (Go toolchain required; about a minute)
-TESSERAE_AOT_LETGO=../let-go-tesserae-aot TESSERAE_AOT_OUT=../lg-tesserae-aot \
-  ./tools/build-aot.sh
+TESSERAE_AOT_LETGO=../let-go-tesserae-aot ./tools/build-aot.sh   # writes tools/.lg/lg-tesserae-aot
 
 # 3. play on it
-LG=../lg-tesserae-aot ./play.sh --stats
+LG=tools/.lg/lg-tesserae-aot ./play.sh --stats
 ```
 
 - `wt/tesserae-aot` is upstream let-go (including the #1051 lowering fix) plus two commits:

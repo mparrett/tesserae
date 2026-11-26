@@ -4,10 +4,11 @@
 #   tools/build-aot.sh [--letgo DIR] [--out PATH] [--lg HOST_LG] [--keep] [NS ...]
 #
 #   --letgo  let-go checkout/worktree the Go is generated into and built from
-#            (default $TESSERAE_AOT_LETGO, else ../worktrees/let-go-tesserae-aot next to
-#            this repo). Never the
+#            (default $TESSERAE_AOT_LETGO, else worktrees/let-go-tesserae-aot in the
+#            workspace this repo is in). Never the
 #            canonical checkout: the script writes (then removes) files there.
-#   --out    output binary (default $TESSERAE_AOT_OUT, else ../lg-bin/lg-tesserae-aot)
+#   --out    output binary (default $TESSERAE_AOT_OUT, else tools/.lg/lg-tesserae-aot,
+#            beside the lg tools/build-lg.sh builds; gitignored)
 #   --lg     lg used to run the lowering (default: built from --letgo first, so
 #            the lowerer and the runtime the Go compiles against always match)
 #   AOT_SKIP=a,b  env: defn names to leave on the VM (e.g. AOT_SKIP=compose! on a
@@ -40,8 +41,12 @@
 set -euo pipefail
 
 game="$(cd "$(dirname "$0")/.." && pwd)"
-letgo="${TESSERAE_AOT_LETGO:-$game/../worktrees/let-go-tesserae-aot}"
-out="${TESSERAE_AOT_OUT:-$game/../lg-bin/lg-tesserae-aot}"
+# The workspace this checkout lives in. Taken from the main checkout's .git,
+# not $game/.., which from a worktree (.claude/worktrees/<name>) is the wrong
+# directory and let the canonical-checkout guard below miss.
+ws="$(dirname "$(dirname "$(git -C "$game" rev-parse --path-format=absolute --git-common-dir)")")"
+letgo="${TESSERAE_AOT_LETGO:-$ws/worktrees/let-go-tesserae-aot}"
+out="${TESSERAE_AOT_OUT:-$game/tools/.lg/lg-tesserae-aot}"
 host_lg=""
 keep=0
 nss=()
@@ -59,8 +64,11 @@ done
 letgo="$(cd "$letgo" && pwd)"
 mkdir -p "$(dirname "$out")"
 out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
-canonical="${TESSERAE_LETGO_CANONICAL:-$game/../let-go}"
-[[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout" >&2; exit 2; }
+# The canonical checkout is 3p/let-go in this workspace; ../let-go is the older
+# layout. Either one is refused.
+for canonical in ${TESSERAE_LETGO_CANONICAL:-} "$ws/3p/let-go" "$ws/let-go"; do
+  [[ ! -d "$canonical" || "$letgo" != "$(cd "$canonical" && pwd)" ]] || { echo "build-aot: refusing to write into the canonical let-go checkout ($canonical)" >&2; exit 2; }
+done
 [[ -f "$letgo/lg.go" ]] || { echo "build-aot: $letgo is not a let-go checkout" >&2; exit 2; }
 
 gen_root="$letgo/pkg/rt/core_go_lowered"
@@ -153,7 +161,8 @@ mkdir -p "$(dirname "$out")"
 
 # Verify: in the tagged binary, after `require`, which defn vars hold a
 # native fn and which are still bytecode.
-verify="$(mktemp --suffix=.lg -t build-aot-verify.XXXXXX)"
+# lg wants a .lg file; macOS mktemp has no --suffix, so name it inside a temp dir.
+verify="$(mktemp -d -t build-aot-verify.XXXXXX)/verify.lg"
 {
   for ns in "${nss[@]}"; do echo "(require '$ns)"; done
   echo "(doseq [[nsn names] ["
@@ -165,7 +174,7 @@ verify="$(mktemp --suffix=.lg -t build-aot-verify.XXXXXX)"
   echo "      (println (if (re-find #\"native-fn\" (str v)) \"NATIVE\" \"BYTECODE\") (str nsn \"/\" n)))))"
 } >"$verify"
 vout="$(cd "$game" && "$out" -source-paths "$game" "$verify" 2>&1)" || { echo "$vout"; echo "build-aot: verify run failed" >&2; exit 1; }
-rm -f "$verify"
+rm -rf "$(dirname "$verify")"
 echo "$vout" | grep '^BYTECODE' || true
 nat=$(echo "$vout" | grep -c '^NATIVE' || true)
 byc=$(echo "$vout" | grep -c '^BYTECODE' || true)
