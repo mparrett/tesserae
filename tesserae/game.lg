@@ -1956,6 +1956,7 @@
     (custom-li? li) (to-title!)                       ; after a custom clear
     (>= li (count L/levels))
     (do (meta-epilogue!)
+        (sfx/finale!)
         (if (:bonus (last L/levels))
           (show-card! "CODA" L/orrery-coda 0xe8c070 [:title])     ; after the Orrery
           (show-card! "EPILOGUE" L/epilogue 0xfff2a0 [:title])))
@@ -1972,6 +1973,7 @@
   (let [n (inc li)]
     (if (and (< n (count L/levels)) (:bonus (nth L/levels n)) (not (:bonus (nth L/levels li))))
       (do (meta-epilogue!)
+          (sfx/finale!)
           (show-card! "EPILOGUE" (into L/epilogue L/orrery-teaser) 0xfff2a0 [:title]))
       (begin-level! n))))
 

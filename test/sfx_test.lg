@@ -31,3 +31,18 @@
   (is (= "MARBLE LOST" (:banner @g/S)) "a newer game banner wins")
   (reset! sfx/on? false)
   (sfx/set-mode! :all))
+
+(deftest the-themes-are-ones-play-theme-takes
+  ;; undertone checks a theme when play-theme is called, which these tests
+  ;; can't reach on a stock lg; this holds the data to the same rules
+  ;; (undertone README: degrees 0..8, lanes of at most 16 steps, at most
+  ;; three drum lanes).
+  (doseq [[n t] [[:title sfx/title-theme] [:outro sfx/outro-theme] [:finale sfx/finale-theme]]]
+    (is (contains? #{:generate :silence :loop} (:then t)) n)
+    (is (seq (:grids t)) n)
+    (doseq [g (:grids t)]
+      (doseq [lane [:lead :bass]]
+        (is (<= (count (get g lane)) 16) [n lane])
+        (is (every? #(<= 0 % 8) (get g lane)) [n lane]))
+      (is (<= (count (:drums g)) 3) [n :drums])
+      (is (every? #(<= (count %) 32) (:drums g)) [n :drums]))))

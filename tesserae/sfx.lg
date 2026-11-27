@@ -125,6 +125,109 @@
     (when (= backend :native) ((native 'undertone/music-stop)))
     (reset! on? false)))
 
+;; ---- authored themes ----
+;; Grids are 16 eighth-note steps in scale degrees (1..8, 0 rests), so a theme
+;; plays in the key of whatever mood is staged: the title's aurora, the level
+;; that was lost, the core the epilogue follows. Drum lanes are kick, clap,
+;; shaker in sixteenths. One motif runs through all three: 1 5 3, three tiles
+;; laid apart, which the title fills in until it is a phrase, the outro lets
+;; fall, and the finale sets whole.
+
+(def title-theme
+  "Under the title, looping until a level begins (end-theme lets it finish
+   the bar, then the level's own music takes over). The mosaic goes down a
+   tile at a time: the first grid lays three, the next fills between them,
+   the third answers from the octave, the fourth sets it home."
+  {:grids [{:lead [1 0 0 0 5 0 0 0 3 0 0 0 0 0 0 0]
+            :bass [1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+            :bed  true}
+           {:lead [1 0 3 0 5 0 0 0 3 0 5 0 8 0 0 0]
+            :bass [1 0 0 0 0 0 0 0 4 0 0 0 0 0 0 0]
+            :bed  true}
+           {:lead  [8 0 7 0 5 0 6 0 5 0 3 0 4 0 0 0]
+            :bass  [6 0 0 0 0 0 0 0 4 0 0 0 0 0 0 0]
+            :drums ["X...............X..............."
+                    ""
+                    "..x...x...x...x...x...x...x...x."]
+            :bed   true}
+           {:lead  [5 0 3 0 2 0 3 0 1 0 0 0 0 0 0 0]
+            :bass  [5 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+            :drums ["X..............................."]
+            :bed   true}]
+   :then :generate})
+
+(def outro-theme
+  "Over THE GROUT SETTLES: the motif from the octave, falling past where the
+   title began, the bed letting go under the last grid, then silence until
+   the title or a retry."
+  {:grids [{:lead [8 0 0 0 5 0 0 0 3 0 0 0 0 0 0 0]
+            :bass [1 0 0 0 0 0 0 0 6 0 0 0 0 0 0 0]
+            :bed  true}
+           {:lead [2 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+            :bass [4 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+            :bed  false}]
+   :then :silence})
+
+(def finale-theme
+  "Under the EPILOGUE and the CODA: the title's phrase set whole, with the
+   kit under it, climbing to the octave and resting there."
+  {:grids [{:lead  [1 0 3 0 5 0 0 0 3 0 5 0 8 0 0 0]
+            :bass  [1 0 0 0 0 0 0 0 5 0 0 0 0 0 0 0]
+            :drums ["X.......X.......X.......X......."
+                    "........x...............x......."
+                    "..x...x...x...x...x...x...x...x."]
+            :bed   true}
+           {:lead  [8 0 7 0 8 0 5 0 6 0 7 0 8 0 0 0]
+            :bass  [6 0 0 0 0 0 0 0 4 0 0 0 0 0 0 0]
+            :drums ["X.......X.......X.......X......."
+                    "........x...............x......."
+                    "..x...x...x...x...x...x...x...x."]
+            :bed   true}
+           {:lead  [5 0 6 0 7 0 8 0 7 0 5 0 3 0 5 0]
+            :bass  [4 0 0 0 0 0 0 0 5 0 0 0 0 0 0 0]
+            :drums ["X.......X.......X.......X...X.X."
+                    "........x...............x......."
+                    "..x...x...x...x...x...x...x...x."]
+            :bed   true}
+           {:lead  [8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+            :bass  [1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+            :drums ["X..............................."]
+            :bed   true}]
+   :then :silence})
+
+;; Which theme is playing: :title, :outro, :finale or nil (the generator).
+(def ^:private theme-on (atom nil))
+
+(defn- play-theme! [kind t]
+  (when-let [f (and (= backend :native) (native 'undertone/play-theme))]
+    (f t)
+    (reset! theme-on kind)))
+
+(defn- title-theme! []
+  ;; The attract demo reloads the title each time it clears, so a title
+  ;; theme already playing is left alone. Without end-theme (an undertone
+  ;; before #167) a :loop could never end, so it plays once and hands over.
+  (when-not (= :title @theme-on)
+    (play-theme! :title (if (native 'undertone/end-theme)
+                          (assoc title-theme :then :loop)
+                          title-theme))))
+
+(defn- end-theme! []
+  ;; A level is starting. The title finishes its bar, then the generator
+  ;; takes over with the level's mood; after an outro or the finale the
+  ;; music is resting in silence, which only another play-theme ends.
+  (case @theme-on
+    :title (when-let [f (native 'undertone/end-theme)] (f {:bars 1}))
+    (:outro :finale) (play-theme! nil nil)
+    nil)
+  (reset! theme-on nil))
+
+(defn finale!
+  "The story is over (the epilogue after the core, or the coda after the
+   orrery)."
+  []
+  (when @on? (play-theme! :finale finale-theme)))
+
 (defn level!
   "A level is loading: li < 0 is the title. lives is the sparks left, so a
    level begun on the last spark starts tense. Takes effect at the next
@@ -137,7 +240,8 @@
     (reset! score-state (if (neg? li)
                           [:aurora 1 0 0.0]
                           [(get theme-mood theme :aurora) (inc li) (quot li 3) (tension-now)]))
-    (push-score!)))
+    (push-score!)
+    (if (neg? li) (title-theme!) (end-theme!))))
 
 (defn lives!
   "The sparks left changed: the last one lifts the level's tension. Not on
@@ -181,7 +285,8 @@
 
 (defn game-over! []
   (shot! {:shot :fall :degree 0 :octave -1 :gain 0.6} 0)
-  (shot! {:shot :thud :gain 0.6 :delay-ms 450} 0))
+  (shot! {:shot :thud :gain 0.6 :delay-ms 450} 0)
+  (when @on? (play-theme! :outro outro-theme)))
 
 (defn level-won!
   "A rising arpeggio in the level's key, timed by the engine (delay-ms), not
