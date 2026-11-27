@@ -26,6 +26,8 @@ github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV91
 github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
 github.com/mparrett/undertone v0.3.1-0.20261127024745-55c6d1b2e2a3 h1:NgOjKn8+71w0PCs6QRWhrPLgw9JqmkBP3vdnDKrCmP8=
 github.com/mparrett/undertone v0.3.1-0.20261127024745-55c6d1b2e2a3/go.mod h1:mxvf57mr9Oh1GYcUsOORng9WI0bgsIu+ETKxPleyPQo=
+github.com/mparrett/undertone v0.3.1-0.20261127232659-57402eaa4554 h1:OaIHy2jiPIc9f5wir4gzY3GLusQlq4Sq8I9MVGRREt8=
+github.com/mparrett/undertone v0.3.1-0.20261127232659-57402eaa4554/go.mod h1:mxvf57mr9Oh1GYcUsOORng9WI0bgsIu+ETKxPleyPQo=
 github.com/nooga/let-go v1.13.1-0.20261110142433-c6665893a7b8 h1:ep18UBMLkZ6L974AbeEFWA+2LeZcfqO7MBJFHaLocjA=
 github.com/nooga/let-go v1.13.1-0.20261110142433-c6665893a7b8/go.mod h1:ank7LsImrP7tHbtb9SNA7DE/r1xoNlZjyldp0CzxW2k=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
