@@ -109,6 +109,16 @@
     (push-score!)
     (when (= backend :native) ((native 'undertone/music-start)))))
 
+(defn position
+  "Where the music is, from undertone/position (undertone #102): a map with
+   :pattern, :row and :heard?, or nil while it is stopped or when this
+   undertone has no position. :heard? is false on let-go's audio, whose queue
+   undertone can't see, so :row there is the last one rendered, ahead of the
+   speaker by that queue."
+  []
+  (when (and @on? (= backend :native))
+    (when-let [f (native 'undertone/position)] (f))))
+
 (defn stop! []
   (when @on?
     (when (= backend :native) ((native 'undertone/music-stop)))
