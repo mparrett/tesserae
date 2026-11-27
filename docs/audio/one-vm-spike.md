@@ -145,3 +145,32 @@ Matt listened to both builds on his phone and on desktop on 2026-11-13: neither
 crackled, and the level difference wasn't worth acting on. let-go's audio became
 the default; `PAGEJS=1` builds the `page.js` way for rollback, and `?queue=`
 only does anything in that build.
+
+### Limits of let-go's audio (as of 2026-11-13)
+
+What the default build gives up next to `page.js`, or hasn't been checked for:
+
+- **The queue is let-go's.** 120 ms in a worker (80 ms on the main-thread
+  fallback below), with no setting the guest can
+  change, so `?queue=` / `--queue` (`undertone/set-queue`) is a no-op outside
+  `PAGEJS=1`. A guest-side setting would be a let-go #255 ask.
+- **Nothing comes back to the game.** The device has no return path to the guest:
+  no playback position, no audio clock. Anything that has to sync to what is
+  heard (phosphene's visuals, say) waits on let-go #255. `audio/pause` and
+  `audio/resume` work (let-go #1115). undertone after this pin has
+  `undertone/position` (#102), the sequencer's row; on this path it is the row
+  last rendered, so it runs ahead of the speaker by let-go's queue, since only
+  undertone's own webaudio output reports what it holds.
+- **A build without `-w-audio` doesn't fail.** undertone (21c3a12, #86) streams
+  into let-go's device only when `_lgAudioOpen` exists and `*audio*` reports
+  enabled, and otherwise falls back to its own webaudio path without a warning.
+  `tools/pages-smoke.py` is the check: it waits for an `lg-audio-shared` worklet
+  unless the site loads `undertone-page.js`.
+- **Cross-origin isolation.** The `SEAM=1` measurement above is on let-go's
+  shared ring, which needs `crossOriginIsolated`. On Pages that comes from the COI
+  service worker, which reloads the page once on a first visit (`page.js` builds
+  do the same). Without isolation let-go falls back to a message-posted ring
+  (`lg-audio-ring`) on the main thread with an 80 ms queue, which hasn't been
+  listened to or measured.
+- **Browsers.** Heard on Matt's phone and desktop; measured in headless Chromium.
+  Desktop Safari and Firefox are untested.
