@@ -157,10 +157,11 @@ What the default build gives up next to `page.js`, or hasn't been checked for:
 - **Nothing comes back to the game.** The device has no return path to the guest:
   no playback position, no audio clock. Anything that has to sync to what is
   heard (phosphene's visuals, say) waits on let-go #255. `audio/pause` and
-  `audio/resume` work (let-go #1115). undertone after this pin has
-  `undertone/position` (#102), the sequencer's row; on this path it is the row
-  last rendered, so it runs ahead of the speaker by let-go's queue, since only
-  undertone's own webaudio output reports what it holds.
+  `audio/resume` work (let-go #1115). Since 2026-11-26 tesserae pins undertone
+  55c6d1b, which has `undertone/position` (#102), the sequencer's row, shown on
+  `?stats` (tesserae #19). On this path it is the row last rendered, ahead of
+  the speaker by let-go's queue: only undertone's own webaudio output
+  (`PAGEJS=1`) reports what it holds.
 - **A build without `-w-audio` doesn't fail.** undertone (21c3a12, #86) streams
   into let-go's device only when `_lgAudioOpen` exists and `*audio*` reports
   enabled, and otherwise falls back to its own webaudio path without a warning.
