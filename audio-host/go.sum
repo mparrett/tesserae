@@ -24,8 +24,8 @@ github.com/jfreymuth/pulse v0.1.3 h1:bc5TdxiB8E+2INnFjFWWgyfgXtz2IyNNNCX+Wt/ZD14
 github.com/jfreymuth/pulse v0.1.3/go.mod h1:cpYspI6YljhkUf1WLXLLDmeaaPFc3CnGLjDZf9dZ4no=
 github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=
 github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
-github.com/mparrett/undertone v0.1.1-0.20261113063909-21c3a1204329 h1:cKreaFrSi5NLsKCF5OvvRIwdfRICsG51TUyOhBg9ZnM=
-github.com/mparrett/undertone v0.1.1-0.20261113063909-21c3a1204329/go.mod h1:mxvf57mr9Oh1GYcUsOORng9WI0bgsIu+ETKxPleyPQo=
+github.com/mparrett/undertone v0.3.1-0.20261127024745-55c6d1b2e2a3 h1:NgOjKn8+71w0PCs6QRWhrPLgw9JqmkBP3vdnDKrCmP8=
+github.com/mparrett/undertone v0.3.1-0.20261127024745-55c6d1b2e2a3/go.mod h1:mxvf57mr9Oh1GYcUsOORng9WI0bgsIu+ETKxPleyPQo=
 github.com/nooga/let-go v1.13.1-0.20261110142433-c6665893a7b8 h1:ep18UBMLkZ6L974AbeEFWA+2LeZcfqO7MBJFHaLocjA=
 github.com/nooga/let-go v1.13.1-0.20261110142433-c6665893a7b8/go.mod h1:ank7LsImrP7tHbtb9SNA7DE/r1xoNlZjyldp0CzxW2k=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=

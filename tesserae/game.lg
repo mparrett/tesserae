@@ -1840,6 +1840,17 @@
                              (and (:swirl l) (< (:swirl-t st 99.0) 3.0)) 0xffa060
                              :else acc))
           (meta-hud! sb r)
+          ;; --stats: the music's place, under best and below the rows the
+          ;; well and orrery panels use. In a browser the panel's bottom rows
+          ;; (the fps line among them) fall below the 24-row grid, so this
+          ;; sits where it can be seen. :heard? false means the row last
+          ;; rendered, ahead of the speaker by the output's queue.
+          (when (:hud-stats @opts)
+            (panel-line! sb (r 18)
+                         (if-let [p (sfx/position)]
+                           (format "music p%-2d r%-3d %s" (:pattern p) (:row p) (if (:heard? p) "heard" "ahead"))
+                           "music --")
+                         0x505870))
           (when (:well l) (draw-well-panel! sb r))
           (when (:orrery l) (draw-orrery-panel! sb r))))
     (let [cs (controls)]
