@@ -198,15 +198,11 @@
 ;; Which theme is playing: :title, :outro, :finale or nil (the generator).
 (def ^:private theme-on (atom nil))
 
-(defn- play-theme! [kind t]
-  (when-let [f (and (= backend :native) (native 'undertone/play-theme))]
-    (f t)
-    (reset! theme-on kind)))
-
-;; The title's bass: a soft felt mallet, a sine with a little octave and
+;; The themes' bass: a soft felt mallet, a sine with a little octave and
 ;; twelfth and a faint strike. The default theme bass, the plucked string,
-;; hit too hard under a lullaby. The overtones are louder than a bass needs
-;; on speakers because a phone barely plays the 50-70 Hz fundamental.
+;; hit too hard under the title's lullaby. The overtones are louder than a
+;; bass needs on speakers because a phone barely plays the 50-70 Hz
+;; fundamental.
 ;; A registered lead plays on the bass lane at 3.4x its :out.
 (def felt-bass
   [[:env 0.008 1.3 0 0.6] [:osc 0 :sine 0 1] [:mul] [:out 0.28 0.5]
@@ -216,19 +212,24 @@
 
 (def ^:private felt-bass?
   ;; Registered once, on first use; false on an undertone without
-  ;; register-lead, where the theme keeps the palette's bass.
+  ;; register-lead, where a theme keeps the palette's bass.
   (delay (if-let [f (native 'undertone/register-lead)]
            (do (f {:name :tess-felt :gate 2 :patch felt-bass}) true)
            false)))
+
+(defn- play-theme! [kind t]
+  (when-let [f (and (= backend :native) (native 'undertone/play-theme))]
+    (f (cond-> t (and t @felt-bass?) (assoc :bass :tess-felt)))
+    (reset! theme-on kind)))
 
 (defn- title-theme! []
   ;; The attract demo reloads the title each time it clears, so a title
   ;; theme already playing is left alone. Without end-theme (an undertone
   ;; before #167) a :loop could never end, so it plays once and hands over.
   (when-not (= :title @theme-on)
-    (play-theme! :title (cond-> title-theme
-                          (native 'undertone/end-theme) (assoc :then :loop)
-                          @felt-bass? (assoc :bass :tess-felt)))))
+    (play-theme! :title (if (native 'undertone/end-theme)
+                          (assoc title-theme :then :loop)
+                          title-theme))))
 
 (defn- end-theme! []
   ;; A level is starting. The title finishes its bar, then the generator
